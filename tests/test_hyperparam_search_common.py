@@ -2,14 +2,14 @@ from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
-from flow_klein.experiments.v0901 import (
-    GRID_0513_EXPANDED,
-    PLANAR_0513_FOURTH,
-    PLANAR_0513_SECOND,
-    PLANAR_0513_THIRD,
-    TREE_0513_SECOND,
-    TREE_0513_THIRD,
-    TREE_0513_FOURTH,
+from flow_klein.experiments.structural import (
+    GRID_SEARCH_SPACE,
+    PLANAR_SEARCH_SPACE,
+    PLANAR_COMPACT_SPACE,
+    PLANAR_WIDE_SPACE,
+    TREE_COMPACT_SPACE,
+    TREE_WIDE_SPACE,
+    TREE_SEARCH_SPACE,
     build_parser,
     fixed_hyperparameters,
     generate_random_configs,
@@ -21,29 +21,29 @@ from flow_klein.experiments.v0901 import (
 
 
 def test_random_configs_are_unique_and_attention_compatible():
-    configs = generate_random_configs(GRID_0513_EXPANDED, 60, seed=42)
+    configs = generate_random_configs(GRID_SEARCH_SPACE, 60, seed=42)
     assert len(configs) == 60
     assert len({tuple(sorted(config.items())) for config in configs}) == 60
     assert all(c["dit_hidden_dim"] % c["dit_num_heads"] == 0 for c in configs)
 
 
 def test_expanded_grids_match_selected_ranges():
-    assert GRID_0513_EXPANDED["lap_pe_dim"] == [12, 16, 20]
-    assert GRID_0513_EXPANDED["encoder_blocks"] == [4, 5, 6]
-    assert PLANAR_0513_SECOND is not TREE_0513_SECOND
-    assert PLANAR_0513_SECOND["degree_profile_blend"] == [0.25, 0.5, 0.75]
-    assert TREE_0513_SECOND["degree_profile_blend"] == [0.5, 0.75, 1.0]
-    assert PLANAR_0513_SECOND["constraint_noise_scale"] == [0.0, 0.05, 0.1]
-    assert TREE_0513_SECOND["constraint_noise_scale"] == [0.0, 0.05, 0.1]
-    assert PLANAR_0513_THIRD["lap_pe_dim"] == [12, 16, 20]
-    assert PLANAR_0513_THIRD["decoder_node_dim"] == [128, 160, 192]
-    assert PLANAR_0513_THIRD["degree_profile_blend"] == [0.0, 0.25, 0.5, 0.75]
-    assert TREE_0513_THIRD["batchSize"] == [12, 16]
-    assert TREE_0513_THIRD["lr"] == [2e-4, 2.5e-4, 3e-4]
-    assert TREE_0513_THIRD["degree_profile_blend"] == [0.25, 0.5, 0.75]
+    assert GRID_SEARCH_SPACE["lap_pe_dim"] == [12, 16, 20]
+    assert GRID_SEARCH_SPACE["encoder_blocks"] == [4, 5, 6]
+    assert PLANAR_COMPACT_SPACE is not TREE_COMPACT_SPACE
+    assert PLANAR_COMPACT_SPACE["degree_profile_blend"] == [0.25, 0.5, 0.75]
+    assert TREE_COMPACT_SPACE["degree_profile_blend"] == [0.5, 0.75, 1.0]
+    assert PLANAR_COMPACT_SPACE["constraint_noise_scale"] == [0.0, 0.05, 0.1]
+    assert TREE_COMPACT_SPACE["constraint_noise_scale"] == [0.0, 0.05, 0.1]
+    assert PLANAR_WIDE_SPACE["lap_pe_dim"] == [12, 16, 20]
+    assert PLANAR_WIDE_SPACE["decoder_node_dim"] == [128, 160, 192]
+    assert PLANAR_WIDE_SPACE["degree_profile_blend"] == [0.0, 0.25, 0.5, 0.75]
+    assert TREE_WIDE_SPACE["batchSize"] == [12, 16]
+    assert TREE_WIDE_SPACE["lr"] == [2e-4, 2.5e-4, 3e-4]
+    assert TREE_WIDE_SPACE["degree_profile_blend"] == [0.25, 0.5, 0.75]
 
 
-def test_grid_recipe_and_search_do_not_enter_new_constraint_branches():
+def test_grid_recipe_and_search_do_not_enter_constraint_branches():
     pytest.importorskip("torch")
     pytest.importorskip("scipy")
     from flow_klein.config.recipes import DATASET_DEFAULTS
@@ -57,25 +57,25 @@ def test_grid_recipe_and_search_do_not_enter_new_constraint_branches():
         "unique_candidate_select",
     ):
         assert option not in grid_recipe
-        assert option not in GRID_0513_EXPANDED
+        assert option not in GRID_SEARCH_SPACE
     assert grid_recipe["decode_mode"] == "topE"
     assert grid_recipe["candidate_multiplier"] == 4
 
 
-def test_fourth_defaults_keep_training_epochs_and_gpu_groups():
+def test_anchor_local_global_defaults_keep_training_epochs_and_gpu_groups():
     for dataset, grid, devices in (
-        ("planar", PLANAR_0513_FOURTH, ("cuda:4", "cuda:5", "cuda:6", "cuda:7")),
-        ("tree", TREE_0513_FOURTH, ("cuda:1", "cuda:2", "cuda:3")),
+        ("planar", PLANAR_SEARCH_SPACE, ("cuda:4", "cuda:5", "cuda:6", "cuda:7")),
+        ("tree", TREE_SEARCH_SPACE, ("cuda:1", "cuda:2", "cuda:3")),
     ):
         spec = search_spec(dataset)
         options = build_parser(spec).parse_args([])
-        assert spec.grid is grid and spec.round_name == "Fourth"
+        assert spec.grid is grid and spec.search_method == "anchor_local_global"
         assert options.num_experiments == 120
         assert options.epoch_number == options.epoch_diff == 2000
         assert spec.default_devices == devices
 
 
-def test_fixed_parameters_preserve_0513_postprocessing():
+def test_constant_parameters_select_dataset_postprocessing():
     options = SimpleNamespace(epoch_number=2000, epoch_diff=2000, training_seed=1432)
     planar = fixed_hyperparameters(search_spec("planar"), options)
     assert planar["connectivity_repair"] is True
@@ -120,13 +120,13 @@ def test_cli_overrides():
     assert options.results_file is None  # resolved inside a fresh run folder
 
 
-def test_fourth_round_outputs_do_not_overwrite_previous_round_files():
+def test_anchor_local_global_round_outputs_do_not_overwrite_previous_round_files():
     planar_options = build_parser(search_spec("planar")).parse_args([])
     tree_options = build_parser(search_spec("tree")).parse_args([])
     assert planar_options.results_file is None
     assert tree_options.results_file is None
-    assert search_spec("planar").results_file == "planar_Fourth.txt"
-    assert search_spec("tree").results_file == "tree_Fourth.txt"
+    assert search_spec("planar").results_file == "planar_anchor_local_global.txt"
+    assert search_spec("tree").results_file == "tree_anchor_local_global.txt"
     repository = Path(__file__).resolve().parents[1]
     planar_launcher = (repository / "scripts" / "planar_hypsearch.sh").read_text(encoding="utf-8")
     tree_launcher = (repository / "scripts" / "tree_hypsearch.sh").read_text(encoding="utf-8")

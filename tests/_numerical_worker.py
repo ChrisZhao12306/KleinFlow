@@ -1,4 +1,4 @@
-"""Isolated old/new numerical trace; writes only to the requested test directory."""
+"""Record a deterministic graph-generation trace in an isolated process."""
 import argparse
 import importlib
 import os
@@ -8,8 +8,7 @@ from pathlib import Path
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--root', required=True)
-parser.add_argument('--kind', choices=['original', 'merged'], required=True)
-parser.add_argument('--pipeline', choices=['fixed', 'v0901'], required=True)
+parser.add_argument('--pipeline', choices=['standard', 'structural'], required=True)
 parser.add_argument('--dataset', required=True)
 parser.add_argument('--output', required=True)
 parser.add_argument('--orca-dir', required=True)
@@ -22,16 +21,10 @@ import numpy as np
 import scipy.sparse as sp
 import torch
 
-if options.kind == 'original':
-    training = importlib.import_module('klein_graphtask')
-    data = importlib.import_module('data')
-    config = importlib.import_module('config')
-    metrics = importlib.import_module('graph_evaluate.benchmark_metrics')
-else:
-    training = importlib.import_module('flow_klein.training.' + options.pipeline)
-    data = importlib.import_module('flow_klein.data.' + options.pipeline)
-    config = importlib.import_module('flow_klein.config.' + options.pipeline)
-    metrics = importlib.import_module('flow_klein.evaluation.' + options.pipeline)
+training = importlib.import_module('flow_klein.training.' + options.pipeline)
+data = importlib.import_module('flow_klein.data.' + options.pipeline)
+config = importlib.import_module('flow_klein.config.' + options.pipeline)
+metrics = importlib.import_module('flow_klein.evaluation.' + options.pipeline)
 orca_dir = Path(options.orca_dir)
 metrics._orca_paths = lambda: (orca_dir, orca_dir / 'orca')
 random.seed(1432)
@@ -45,11 +38,11 @@ device = torch.device(options.device)
 args = config.parser.parse_args(['--dataset', options.dataset, '--device', options.device,
                                  '--graphEmDim', '8', '--cond_dim', '8', '--encoder_blocks', '2',
                                  '--decoder_node_dim', '16', '--lap_pe_dim', '2', '--dropout', '0.1'])
-if options.pipeline == 'v0901':
+if options.pipeline == 'structural':
     config.apply_klein_dataset_defaults(args)
 
-# Fixture injection avoids downloads and writes by the original data loaders.
-# The original split, ordering, feature and padding functions still execute.
+# Synthetic fixtures isolate numerical checks from dataset downloads.
+# Dataset-specific split, ordering, feature, and padding functions still execute.
 raw = [sp.csr_matrix(nx.to_scipy_sparse_array(
     nx.path_graph(4 + index % 4) if index % 2 else nx.cycle_graph(4 + index % 4),
     dtype=np.float32, format='csr')) for index in range(30)]
@@ -67,13 +60,13 @@ mask = training.build_node_mask(dataset.num_nodes[:2], batch_size[1], device)
 graph = training.prepare_batch_graphs(org_adj, device)
 profile = None
 extra = {}
-if options.pipeline == 'v0901':
+if options.pipeline == 'structural':
     profile = training.DatasetProfile(n_bins=32).fit(train_adj)
     extra = dict(use_struct_cond=True, profile_stat_dim=profile.profile_stat_dim, struct_cond_dim=4)
 encoder = training.KleinEncoder(in_feature_dim=dataset.feature_size, hidden_layers=[16, 16],
                                 graph_latent_dim=8, cond_dim=8, encoder_blocks=2,
                                 input_proj_dim=8, dropout=0.1, **extra)
-full_cond_dim = encoder.full_cond_dim if options.pipeline == 'v0901' else 8
+full_cond_dim = encoder.full_cond_dim if options.pipeline == 'structural' else 8
 decoder = training.MaskedGraphDecoder(latent_dim=8, cond_dim=full_cond_dim,
                                      max_nodes=batch_size[1], directed=args.directed, node_dim=16)
 model = training.KleinGraphVAE(encoder, decoder).to(device)
@@ -118,7 +111,7 @@ kwargs = dict(adj_logits=adj_logits, adj_probs=adj_probs, target_adj=target,
               mean=mean, kernel_model=None, target_kernel_val=None)
 if profile is not None:
     kwargs['degree_pred'] = aux['degree_pred']
-losses = training.compute_vae_loss_v2(**kwargs)
+losses = training.compute_vae_loss(**kwargs)
 record('loss', losses)
 losses['total'].backward()
 record('gradients', {name: p.grad for name, p in model.named_parameters() if p.grad is not None})
@@ -138,7 +131,7 @@ flow.eval()
 record('euler', flow.sample(cond.detach(), steps=3))
 record('heun', flow.sample_heun(cond.detach(), steps=3))
 
-# Controlled decoder outputs exercise each dataset's original postprocessing.
+# Controlled decoder outputs exercise each dataset's postprocessing.
 n = batch_size[1]
 edge_logits = torch.linspace(-2, 2, n*n, device=device).reshape(1, n, n).repeat(2, 1, 1)
 node_logits = torch.ones(2, n, device=device)

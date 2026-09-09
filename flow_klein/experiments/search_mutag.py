@@ -1,4 +1,4 @@
-"""Original fixed hyperparameter search for mutag."""
+"""Random hyperparameter search for mutag graph generation."""
 
 import random
 import time
@@ -15,7 +15,7 @@ DATASET = "MUTAG"
 DEVICE = "cuda:2"
 TASK = "klein_graphtask"
 NUM_EXPERIMENTS = 60
-RESULTS_FILE = "MUTAG_Third.txt"
+RESULTS_FILE = "mutag_search.txt"
 FIXED_HYPERPARAMS = {
     'epoch_number': 2000,    # Encoder epochs (smaller dataset)
     'epoch_diff': 2000,     # Flow matching epochs
@@ -33,9 +33,7 @@ FIXED_HYPERPARAMS = {
     'flow_guidance_scale': 1.05,
 }
 
-# Search space refined from MUTAG_First + MUTAG_Second results.
-# The best runs favor larger graphEmDim, low lr_diff, moderate flow steps,
-# and relatively shallow DiT depth, while keeping some exploration around that mode.
+# Dataset-specific search ranges and constant training settings.
 HYPERPARAM_GRID = {
     # Encoder architecture/training
     'graphEmDim': [40, 48, 56, 64],
@@ -102,8 +100,8 @@ def generate_random_configs(num_configs: int, seed: int = 42) -> list:
 
 def run_experiment(config: dict, exp_id: int) -> dict:
     """Run a single experiment with given hyperparameters."""
-    from flow_klein.config.fixed import parser
-    from flow_klein.training.fixed import klein_graphtask
+    from flow_klein.config.standard import parser
+    from flow_klein.training.standard import klein_graphtask
     
     # Create argument list
     args_list = [

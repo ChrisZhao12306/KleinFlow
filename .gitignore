@@ -12,3 +12,5 @@ third_party/orca/orca.exe
 *.egg-info/
 build/
 dist/
+/configs/
+/VALIDATION.md

@@ -1,4 +1,4 @@
-"""Original fixed hyperparameter search for community."""
+"""Random hyperparameter search for community graph generation."""
 
 import random
 import time
@@ -16,7 +16,7 @@ DATASET = "SynCommunity1000_origin"
 DEVICE = "cuda:1"
 TASK = "klein_graphtask"
 NUM_EXPERIMENTS = 60
-RESULTS_FILE = "SynCommunity1000_Sixth.txt"
+RESULTS_FILE = "community_search.txt"
 FIXED_HYPERPARAMS = {
     'epoch_number': 2000,   # Encoder epochs
     'epoch_diff': 2000,     # Flow matching epochs
@@ -30,13 +30,7 @@ FIXED_HYPERPARAMS = {
     'flow_guidance_scale': 1.1,
 }
 
-# Search space updated from SynCommunity1000_Fifth.txt.
-# Round 6 shifts from broad exploration to exploit the most reliable basin:
-# - Top-12 runs overwhelmingly prefer `batchSize=128`, so the noisier 160 branch is dropped.
-# - `graphEmDim=56` dominates the strongest results, with 64 still worth keeping as backup.
-# - `lr=2e-4`, `flow_steps=320`, and `dit_hidden_dim=384` repeatedly lag behind, so they are pruned.
-# - `encoder_blocks=5` is the clearest winner, but 4 is kept to preserve the nearby secondary basin.
-# - `cond_dim`, `flow_cond_dropout`, and `flow_base_std` stay wider because the top ranks are still mixed.
+# Dataset-specific search ranges and constant training settings.
 HYPERPARAM_GRID = {
     # Structural encoder settings: keep coverage where the top runs remain mixed.
     'lap_pe_dim': [6, 8, 12],
@@ -109,8 +103,8 @@ def generate_random_configs(num_configs: int, seed: int = 42) -> list:
 
 def run_experiment(config: dict, exp_id: int) -> dict:
     """Run a single experiment with given hyperparameters."""
-    from flow_klein.config.fixed import parser
-    from flow_klein.training.fixed import klein_graphtask
+    from flow_klein.config.standard import parser
+    from flow_klein.training.standard import klein_graphtask
     
     # Create argument list
     args_list = [

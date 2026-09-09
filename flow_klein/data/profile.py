@@ -1,14 +1,7 @@
-"""
-Klein GraphTask dataset profiles and per-dataset default recipes.
+"""Training-set statistics for structural conditioning and candidate ranking.
 
-DatasetProfile collects train-core graph statistics for:
-  - structural conditioning (encoder side)
-  - sampling-time stats bank
-  - candidate reranking after generation
-
-DATASET_DEFAULTS provides per-dataset starting points for the new pipeline.
-CLI flags always override these defaults.
-"""
+DatasetProfile stores scalar statistics and degree histograms, provides
+normalization for conditioning vectors, and scores generated candidates."""
 
 from __future__ import annotations
 
@@ -235,7 +228,7 @@ class DatasetProfile:
     def score_graph(self, g: nx.Graph) -> float:
         """Distance from a candidate graph to the train-core profile mean.
 
-        Weights (per Plan.md Intervention 8):
+        Scoring weights:
             node_count    1.0
             edge_count    1.0
             density       1.0
@@ -291,6 +284,3 @@ class DatasetProfile:
         return self
 
 
-# ---------------------------------------------------------------- per-dataset recipes
-# Numbers are starting points (Plan.md Intervention 9). Hypsearch sweeps narrowly
-# around these. CLI flags override them.

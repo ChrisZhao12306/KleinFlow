@@ -1,4 +1,4 @@
-"""Original v0901 defaults, limited to its three supported datasets."""
+"""Training and decoding defaults for Planar, Tree, and Grid."""
 DATASET_DEFAULTS = {
     "Grid": {
         "encoder_blocks": 5,

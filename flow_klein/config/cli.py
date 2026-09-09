@@ -1,4 +1,4 @@
-"""Select the original argument parser before parsing model parameters."""
+"""Resolve dataset-specific configuration before parsing training arguments."""
 import argparse
 from importlib import import_module
 
@@ -9,7 +9,7 @@ def build_parser(dataset):
     spec = dataset_spec(dataset)
     module = import_module('flow_klein.config.' + spec.pipeline)
     parser = module.parser
-    parser.description = 'Klein Flow Matching: {} pipeline'.format(spec.pipeline)
+    parser.description = 'KleinFlow training on {}'.format(spec.name)
     for action in parser._actions:
         if action.dest == 'taskselect':
             action.choices = ['klein_graphtask']
@@ -27,7 +27,7 @@ def parse_args(argv=None):
     parser = build_parser(spec.name)
     args = parser.parse_args(argv)
     args.dataset = spec.training_name
-    if spec.pipeline == 'v0901':
-        from flow_klein.config.v0901 import apply_klein_dataset_defaults
+    if spec.pipeline == 'structural':
+        from flow_klein.config.structural import apply_klein_dataset_defaults
         apply_klein_dataset_defaults(args)
     return args

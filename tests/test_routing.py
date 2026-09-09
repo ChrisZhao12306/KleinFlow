@@ -13,20 +13,20 @@ from flow_klein.config.recipes import DATASET_DEFAULTS
 from flow_klein.paths import ROOT, prepare_training_args
 from flow_klein.registry import DATASETS, dataset_spec
 
-CONTRACTS = json.loads((Path(__file__).parent / 'fixtures/source_contracts.json').read_text())
+CONTRACTS = json.loads((Path(__file__).parent / 'fixtures/reference_contracts.json').read_text())
 
 
 @pytest.mark.parametrize('name', list(DATASETS))
-def test_original_defaults_and_dataset_recipes(name):
+def test_reference_defaults_and_dataset_recipes(name):
     spec = dataset_spec(name)
     parser = build_parser(name)
-    original = CONTRACTS['default_parameters'][spec.pipeline]
+    reference = CONTRACTS['default_parameters'][spec.pipeline]
     for action in parser._actions:
         if action.dest not in {'help', 'taskselect'}:
-            assert action.default == original[action.dest], action.dest
+            assert action.default == reference[action.dest], action.dest
     args = parse_args(['--dataset', name])
     assert args.dataset == spec.training_name
-    if spec.pipeline == 'v0901':
+    if spec.pipeline == 'structural':
         for key, value in DATASET_DEFAULTS[spec.training_name].items():
             assert getattr(args, key) == value
     else:
@@ -53,7 +53,7 @@ def test_explicit_values_equal_to_parser_defaults_override_recipes():
     assert args.bfsOrdering is True
     assert args.directed is False
     assert args.candidate_multiplier == 3
-    from flow_klein.config.v0901 import apply_klein_dataset_defaults
+    from flow_klein.config.structural import apply_klein_dataset_defaults
     apply_klein_dataset_defaults(args)
     assert args.candidate_multiplier == 3
 
@@ -66,10 +66,10 @@ def test_out_of_scope_datasets_are_rejected(name):
 
 def test_wrong_internal_route_cannot_silently_train(tmp_path):
     args = parse_args(['--dataset', 'ego'])
-    with pytest.raises(ValueError, match='must use fixed'):
-        prepare_training_args(args, 'v0901')
+    with pytest.raises(ValueError, match='must use standard'):
+        prepare_training_args(args, 'structural')
     args.graph_save_path = str(tmp_path / 'output')
-    prepare_training_args(args, 'fixed')
+    prepare_training_args(args, 'standard')
     assert args.graph_save_path.endswith(os.sep)
     assert not (tmp_path / 'output').exists()
 
@@ -100,10 +100,10 @@ def test_unique_environment_preserves_source_dependencies():
     assert hashlib.sha256(environment.split('\n', 1)[1].encode()).hexdigest() == CONTRACTS['environment_body_sha256']
 
 
-def test_search_baselines_match_original_files_without_old_logs():
-    for name, expected in CONTRACTS['baseline_sha256'].items():
-        source = (ROOT / 'configs' / name).read_text()
-        assert hashlib.sha256(source.encode()).hexdigest() == expected
+def test_search_anchors_match_reference_hashes():
+    from flow_klein.experiments.anchors import SEARCH_ANCHORS
+    encoded = json.dumps(SEARCH_ANCHORS, sort_keys=True, separators=(',', ':')).encode()
+    assert hashlib.sha256(encoded).hexdigest() == CONTRACTS['search_anchors_sha256']
 
 
 def test_smoke_commands_cover_all_datasets_with_valid_arguments(tmp_path):

@@ -1,4 +1,4 @@
-"""Reusable expanded random-search runner for SimGFM benchmarks."""
+"""Anchor-based local and global hyperparameter search for Planar and Tree."""
 
 from __future__ import annotations
 
@@ -12,16 +12,17 @@ import traceback
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from flow_klein.paths import ROOT, CONFIG_ROOT, OUTPUT_ROOT
+from flow_klein.paths import ROOT, OUTPUT_ROOT
+from flow_klein.experiments.anchors import SEARCH_ANCHORS
+from copy import deepcopy
 from typing import Dict, List, Mapping, Tuple
 
 
 TASK = "klein_graphtask"
-FOURTH_ROUND = "Fourth"
-BASELINE_FILENAME = "hyperparam_search_baselines_fourth.json"
+SEARCH_METHOD = "anchor_local_global"
 
-# Exact expanded search space used by Flow_Klein_0513/Grid_hypsearch.py.
-GRID_0513_EXPANDED = {
+# Dataset-specific search ranges and constant training settings.
+GRID_SEARCH_SPACE = {
     "lap_pe_dim": [12, 16, 20],
     "encoder_blocks": [4, 5, 6],
     "graphEmDim": [56, 64, 80, 96],
@@ -39,10 +40,8 @@ GRID_0513_EXPANDED = {
     "degree_aux_weight": [0.05, 0.10, 0.15],
 }
 
-# Second-round Planar space centred on the best completed First-round model
-# (encoder=5, graph=56, decoder=160, DiT=384x7, LapPE=20).  Learning rates,
-# flow controls, and regularization retain the established 0513 ranges.
-PLANAR_0513_SECOND = {
+# Dataset-specific search ranges and constant training settings.
+PLANAR_COMPACT_SPACE = {
     "lap_pe_dim": [16, 20],
     "encoder_blocks": [4, 5, 6],
     "graphEmDim": [48, 56, 64],
@@ -62,9 +61,8 @@ PLANAR_0513_SECOND = {
     "constraint_noise_scale": [0.0, 0.05, 0.10],
 }
 
-# Second-round Tree space centred on its First-round best model
-# (encoder=5, graph=96, decoder=160, DiT=320x5, LapPE=16).
-TREE_0513_SECOND = {
+# Dataset-specific search ranges and constant training settings.
+TREE_COMPACT_SPACE = {
     "lap_pe_dim": [12, 16, 20],
     "encoder_blocks": [4, 5, 6],
     "graphEmDim": [80, 96, 112],
@@ -84,11 +82,8 @@ TREE_0513_SECOND = {
     "constraint_noise_scale": [0.0, 0.05, 0.10],
 }
 
-# Third round: the current snapshot contains 21 Planar and 43 Tree trials.
-# Preserve all top-three configurations, explore stronger Planar degree
-# regularization / fewer flow steps, and weaker Tree degree regularization.
-# These small-sample associations guide exploration, not causal conclusions.
-PLANAR_0513_THIRD = {
+# Dataset-specific search ranges and constant training settings.
+PLANAR_WIDE_SPACE = {
     "lap_pe_dim": [12, 16, 20],
     "encoder_blocks": [4, 5, 6],
     "graphEmDim": [48, 56, 64, 80],
@@ -108,9 +103,8 @@ PLANAR_0513_THIRD = {
     "constraint_noise_scale": [0.00, 0.05, 0.10, 0.15],
 }
 
-# All five Tree leaders use degree_reg_weight=0.15. Blend=1.0 performed
-# poorly in this snapshot; retain LapPE=16 from the second-ranked trial.
-TREE_0513_THIRD = {
+# Dataset-specific search ranges and constant training settings.
+TREE_WIDE_SPACE = {
     "lap_pe_dim": [8, 12, 16, 20],
     "encoder_blocks": [4, 5, 6],
     "graphEmDim": [64, 80, 96, 112],
@@ -130,11 +124,8 @@ TREE_0513_THIRD = {
     "constraint_noise_scale": [0.00, 0.05, 0.10, 0.15],
 }
 
-# Fourth-round ranges derived from the completed 60/60 Third snapshots.
-# Keep every top-three config. Planar's low-lr/high-degree-aux family had
-# large outliers; focus the learning-rate range upward without treating
-# marginal rankings from this nonuniform search as causal evidence.
-PLANAR_0513_FOURTH = {
+# Dataset-specific search ranges and constant training settings.
+PLANAR_SEARCH_SPACE = {
     "lap_pe_dim": [16, 20],
     "encoder_blocks": [4, 5, 6],
     "graphEmDim": [48, 56, 64],
@@ -154,9 +145,8 @@ PLANAR_0513_FOURTH = {
     "constraint_noise_scale": [0.00, 0.025, 0.05, 0.075, 0.10, 0.15],
 }
 
-# Tree leaders favour graph dimensions 64-80, decoder=160, DiT=320x5,
-# dropout=0.05 and degree_reg_weight=0.15. Refine around these values.
-TREE_0513_FOURTH = {
+# Dataset-specific search ranges and constant training settings.
+TREE_SEARCH_SPACE = {
     "lap_pe_dim": [12, 16, 20, 24],
     "encoder_blocks": [5, 6, 7],
     "graphEmDim": [56, 64, 72, 80, 96],
@@ -176,7 +166,7 @@ TREE_0513_FOURTH = {
     "constraint_noise_scale": [0.025, 0.05, 0.075, 0.10],
 }
 
-# Flow_Klein_0513 COLLAB grid with the user-selected batch/step overrides.
+# Dataset-specific search ranges and constant training settings.
 
 
 @dataclass(frozen=True)
@@ -184,26 +174,26 @@ class SearchSpec:
     dataset: str
     grid: Mapping[str, List]
     guidance_scale: float
-    round_name: str
+    search_method: str
     default_devices: Tuple[str, ...] = ("cuda:0",)
     default_experiments: int = 60
 
     @property
     def results_file(self):
-        return f"{self.dataset}_{self.round_name}.txt"
+        return f"{self.dataset}_{self.search_method}.txt"
 
     @property
     def log_stem(self):
-        return f"{self.dataset}_hypsearch_{self.round_name.lower()}"
+        return f"{self.dataset}_hypsearch_{self.search_method.lower()}"
 
 
 SEARCH_SPECS = {
     "planar": SearchSpec(
-        "planar", PLANAR_0513_FOURTH, 1.15, FOURTH_ROUND,
+        "planar", PLANAR_SEARCH_SPACE, 1.15, SEARCH_METHOD,
         ("cuda:4", "cuda:5", "cuda:6", "cuda:7"), default_experiments=120
     ),
     "tree": SearchSpec(
-        "tree", TREE_0513_FOURTH, 1.15, FOURTH_ROUND,
+        "tree", TREE_SEARCH_SPACE, 1.15, SEARCH_METHOD,
         ("cuda:1", "cuda:2", "cuda:3"), default_experiments=120
     )
 }
@@ -214,10 +204,8 @@ def search_spec(dataset: str) -> SearchSpec:
 
 
 def baseline_snapshot(dataset: str) -> Dict:
-    """Frozen Third leaders for Fourth; never read live result files at startup."""
-    path = CONFIG_ROOT / BASELINE_FILENAME
-    with path.open(encoding="utf-8") as handle:
-        return json.load(handle)["datasets"][dataset]
+    """Load immutable anchor configurations for local and global search."""
+    return deepcopy(SEARCH_ANCHORS[dataset])
 
 
 def generate_random_configs(
@@ -251,11 +239,11 @@ def generate_random_configs(
 
 
 def generate_experiments(spec: SearchSpec, options) -> List[Dict]:
-    """3 anchors + 93 adjacent local variants + 24 global trials at N=120.
+    """Allocate 3 anchor, 93 local, and 24 global trials for a budget of 120.
 
     Each anchor has 31 variants: 11 single-, 10 double-, 10 triple-parameter
     changes. Other budgets use up to three anchors, then floor(0.8 * remaining)
-    local trials (e.g. the previous 3 + 45 + 12 split at N=60).
+    local trials (e.g. 3 + 45 + 12 trials at N=60).
     """
     count = options.num_experiments
     if count <= 0:
@@ -335,7 +323,7 @@ def fixed_hyperparameters(spec: SearchSpec, options) -> Dict:
 
 
 def _training_args(spec: SearchSpec, options, config: Dict, experiment_id: int):
-    from flow_klein.config.v0901 import parser as training_parser
+    from flow_klein.config.structural import parser as training_parser
 
     fixed = fixed_hyperparameters(spec, options)
     argument_list = [
@@ -366,7 +354,7 @@ def run_experiment(spec: SearchSpec, options, config: Dict, experiment_id: int) 
     started = time.time()
     try:
         import torch
-        from flow_klein.training.v0901 import klein_graphtask
+        from flow_klein.training.structural import klein_graphtask
 
         args, _ = _training_args(spec, options, config, experiment_id)
         if options.device != "cpu":
@@ -449,7 +437,7 @@ def reproduction_command(spec: SearchSpec, options, config: Mapping, result=None
     # Re-running a printed command also gets a fresh model directory. `&&`
     # prevents training if mktemp cannot reserve it. Commands target Bash.
     root = Path(getattr(options, "run_dir", ".")).resolve()
-    template = str(root / f"{spec.dataset}_{spec.round_name}_reproduce_XXXXXX")
+    template = str(root / f"{spec.dataset}_{spec.search_method}_reproduce_XXXXXX")
     return (f"reproduce_dir=$(mktemp -d {shlex.quote(template)}) && " + command
             + ' --graph_save_path "$reproduce_dir/"')
 
@@ -465,10 +453,10 @@ def save_results(spec: SearchSpec, options, results: List[Dict]) -> None:
 
     with atomic_text_writer(destination) as handle:
         handle.write("=" * 130 + "\n")
-        handle.write("FLOW_KLEIN_0513 SIMGFM HYPERPARAMETER SEARCH\n")
+        handle.write("KLEINFLOW HYPERPARAMETER SEARCH\n")
         handle.write("=" * 130 + "\n")
         handle.write(f"Dataset: {spec.dataset}\n")
-        handle.write(f"Round: {spec.round_name}\n")
+        handle.write(f"Search method: {spec.search_method}\n")
         handle.write(f"Run directory: {getattr(options, 'run_dir', 'N/A')}\n")
         handle.write(f"Run status: {getattr(options, 'run_status', 'running')}\n")
         handle.write("Metric profile: vun_ratio\n")
@@ -536,7 +524,7 @@ def save_results(spec: SearchSpec, options, results: List[Dict]) -> None:
 
 def build_parser(spec: SearchSpec) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description=f"Flow_Klein_0513 hyperparameter search for {spec.dataset}"
+        description=f"KleinFlow hyperparameter search for {spec.dataset}"
     )
     devices = parser.add_mutually_exclusive_group()
     devices.add_argument("--device", help="One physical CUDA device, or cpu")

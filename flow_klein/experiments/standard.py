@@ -1,4 +1,4 @@
-"""Original random-search runner for the two small-graph benchmarks."""
+"""Random search for Ego-small and Community-small."""
 
 from __future__ import annotations
 
@@ -47,11 +47,7 @@ SMALL_GRAPH_GRID = {
     "dit_num_layers": [3, 4, 5],
 }
 
-# Third-pass spaces derived from both completed search rounds. For community,
-# the second round plateaued near the first-round optimum, so the space focuses
-# on the consistently strong region and only expands boundaries that remained
-# competitive. Ego improved in the second round, so its space follows the new
-# mode while continuing to probe beyond boundary optima.
+# Dataset-specific search ranges and constant training settings.
 COMMUNITY_SMALL_GRID = {
     **SMALL_GRAPH_GRID,
     "graphEmDim": [36, 40, 44, 48, 52],
@@ -82,7 +78,7 @@ class SearchSpec:
     dataset: str
     grid: Mapping[str, List]
     guidance_scale: float
-    results_stage: str = "First"
+    search_method: str = "random"
 
     @property
     def profile(self) -> str:
@@ -91,10 +87,10 @@ class SearchSpec:
 
 SEARCH_SPECS = {
     "ego_small": SearchSpec(
-        "ego_small", EGO_SMALL_GRID, 1.05, results_stage="Third"
+        "ego_small", EGO_SMALL_GRID, 1.05, search_method="random"
     ),
     "community_small": SearchSpec(
-        "community_small", COMMUNITY_SMALL_GRID, 1.05, results_stage="Third"
+        "community_small", COMMUNITY_SMALL_GRID, 1.05, search_method="random"
     )
 }
 
@@ -146,7 +142,7 @@ def fixed_hyperparameters(spec: SearchSpec, options) -> Dict:
 
 
 def _training_args(spec: SearchSpec, options, config: Dict, experiment_id: int):
-    from flow_klein.config.fixed import parser as training_parser
+    from flow_klein.config.standard import parser as training_parser
 
     fixed = fixed_hyperparameters(spec, options)
     argument_list = [
@@ -170,7 +166,7 @@ def _training_args(spec: SearchSpec, options, config: Dict, experiment_id: int):
 
 
 def run_experiment(spec: SearchSpec, options, config: Dict, experiment_id: int) -> Dict:
-    from flow_klein.training.fixed import klein_graphtask
+    from flow_klein.training.standard import klein_graphtask
 
     args, fixed = _training_args(spec, options, config, experiment_id)
     full_config = {**fixed, **config}
@@ -347,14 +343,14 @@ def run_search(dataset: str, argv=None) -> None:
         spec.grid, options.num_experiments, options.search_seed
     )
     if options.dry_run:
-        print(json.dumps(dict(dataset=spec.dataset, pipeline="fixed", device=options.device,
+        print(json.dumps(dict(dataset=spec.dataset, pipeline="standard", device=options.device,
                               configurations=[{**fixed_hyperparameters(spec, options), **c}
                                               for c in configurations]), indent=2))
         return
 
     import torch
-    from flow_klein.data.benchmarks_fixed import load_benchmark_splits, split_sizes
-    from flow_klein.evaluation.fixed import preflight_metric_dependencies
+    from flow_klein.data.benchmarks_standard import load_benchmark_splits, split_sizes
+    from flow_klein.evaluation.standard import preflight_metric_dependencies
     splits = load_benchmark_splits(spec.dataset)
     print(f"Prepared {spec.dataset}: {split_sizes(splits)}")
     if options.prepare_only:
@@ -363,7 +359,7 @@ def run_search(dataset: str, argv=None) -> None:
     options.log_dir = str(Path(options.log_dir).resolve() if options.log_dir else search_directory(spec.dataset))
     Path(options.log_dir).mkdir(parents=True, exist_ok=True)
     options.results_file = str(Path(options.results_file).resolve() if options.results_file else
-                               Path(options.log_dir) / f"{spec.dataset}_{spec.results_stage}.txt")
+                               Path(options.log_dir) / f"{spec.dataset}_{spec.search_method}.txt")
     Path(options.results_file).parent.mkdir(parents=True, exist_ok=True)
     results = []
     started = time.time()

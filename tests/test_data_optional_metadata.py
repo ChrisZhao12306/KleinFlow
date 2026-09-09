@@ -4,7 +4,7 @@ pytest.importorskip("dgl")
 
 import scipy.sparse as sp
 
-from flow_klein.data.v0901 import Datasets
+from flow_klein.data.structural import Datasets
 
 
 def test_size_filter_preserves_missing_labels_and_features():

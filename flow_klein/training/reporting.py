@@ -1,4 +1,4 @@
-"""Machine-readable results shared by both training implementations."""
+"""Write reproducibility metadata and graph-generation metrics."""
 import json
 import os
 import platform
@@ -34,7 +34,7 @@ def write_metrics_json(args, results, graph_save_path, timestamp, outer_seed, in
                    outer_split_seed=None if benchmark else outer_seed,
                    validation_split_seed=(int(getattr(args, 'split_seed', 1432))
                                           if inner_validation and not benchmark else None),
-                   split_strategy=('upstream_fixed' if benchmark else
+                   split_strategy=('benchmark_split' if benchmark else
                                    'seeded_80_20_plus_inner_val' if inner_validation else 'seeded_80_20'),
                    metric_profile=spec.metrics, timestamp=timestamp, device=str(args.device),
                    gpu_name=gpu_name, python_version=platform.python_version(),

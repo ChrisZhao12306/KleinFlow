@@ -1,8 +1,5 @@
+"""Graph autoencoder training, conditional Flow Matching, and graph evaluation."""
 from flow_klein.paths import OUTPUT_ROOT
-"""
-Klein GraphTask V2: graph generation with structural encoder/decoder upgrades
-and conditional Klein flow matching.
-"""
 
 import logging
 import os
@@ -17,18 +14,18 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 
-from flow_klein.data.fixed import Datasets, list_graph_loader, data_split, BFS
-from flow_klein.data.benchmarks_fixed import (
+from flow_klein.data.standard import Datasets, list_graph_loader, data_split, BFS
+from flow_klein.data.benchmarks_standard import (
     is_benchmark_dataset,
     load_benchmark_splits,
     normalize_benchmark_name,
 )
 from flow_klein.models.kernels import kernel
-from flow_klein.models.fixed import KleinEncoder, KleinGraphVAE, MaskedGraphDecoder
+from flow_klein.models.standard import KleinEncoder, KleinGraphVAE, MaskedGraphDecoder
 from flow_klein.models.flow_matching import KleinFlowMatching
 from flow_klein.geometry.klein import Klein
 from flow_klein.evaluation.spectre import degree_stats, clustering_stats, spectral_stats
-from flow_klein.evaluation.fixed import (
+from flow_klein.evaluation.standard import (
     evaluate_external_benchmark,
     evaluation_profile,
     preflight_metric_dependencies,
@@ -189,7 +186,7 @@ def compute_kernel_matching_loss(reconstructed_adj, target_kernel_val, kernel_mo
     return alpha * kernel_loss
 
 
-def compute_vae_loss_v2(
+def compute_vae_loss(
     adj_logits,
     adj_probs,
     target_adj,
@@ -207,7 +204,7 @@ def compute_vae_loss_v2(
     stats_weight=0.1,
     kl_weight=0.05,
 ):
-    """Compute V2 reconstruction loss with node masking and auxiliary stats."""
+    """Compute masked reconstruction, graph-statistics, and latent losses."""
     diag_idx = torch.arange(target_adj.shape[-1], device=target_adj.device)
     target_adj = target_adj.clone().float()
     target_adj[:, diag_idx, diag_idx] = 0.0
@@ -301,7 +298,7 @@ def collect_encoder_outputs(args, model, list_graphs, device):
 
 
 def train_klein_encoder(args, list_graphs, val_adj, device):
-    """Train the upgraded Klein encoder/decoder stack."""
+    """Train the Klein graph encoder and masked graph decoder."""
     print("\n" + "=" * 60)
     print("Phase 1: Training Klein Encoder")
     print("=" * 60)
@@ -402,7 +399,7 @@ def train_klein_encoder(args, list_graphs, val_adj, device):
             )
 
             stats_target = compute_graph_batch_stats(subgraphs, node_mask)
-            losses = compute_vae_loss_v2(
+            losses = compute_vae_loss(
                 adj_logits=adj_logits,
                 adj_probs=reconstructed_adj,
                 target_adj=subgraphs,
@@ -732,9 +729,9 @@ def evaluate_and_save_results(
 
 
 def klein_graphtask(args):
-    """Main entry point for Klein GraphTask V2."""
+    """Run graph autoencoder training, Flow Matching, sampling, and evaluation."""
     from flow_klein.paths import prepare_training_args
-    prepare_training_args(args, "fixed")
+    prepare_training_args(args, "standard")
     training_seed = int(getattr(args, "seed", 0))
     np.random.seed(training_seed)
     random.seed(training_seed)
@@ -761,7 +758,7 @@ def klein_graphtask(args):
     )
 
     print("=" * 60)
-    print("Klein GraphTask V2: Graph Generation with Conditional Klein Flow")
+    print("KleinFlow: Graph Generation with Conditional Flow Matching")
     print("=" * 60)
     print(f"Dataset: {args.dataset}")
     print(f"Training seed: {training_seed}")

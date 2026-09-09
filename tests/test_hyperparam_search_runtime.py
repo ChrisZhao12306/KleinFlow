@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from flow_klein.experiments import v0901 as common
+from flow_klein.experiments import structural as common
 from flow_klein.experiments import runtime
 
 
@@ -66,7 +66,7 @@ result = dict(experiment, metrics={"vun": 1.0, "frac_valid": 1.0,
 
 
 @pytest.mark.parametrize("dataset,source_ids", [("planar", [59, 36, 17]), ("tree", [45, 6, 9])])
-def test_full_sampling_and_exact_historical_baselines(dataset, source_ids):
+def test_full_sampling_and_exact_search_anchors(dataset, source_ids):
     spec = common.search_spec(dataset)
     options = common.build_parser(spec).parse_args([])
     rows = common.generate_experiments(spec, options)
@@ -135,9 +135,9 @@ def test_device_selection_and_uuid_isolation(monkeypatch):
 
 
 def test_repeated_and_concurrent_run_creation_preserves_old_files(tmp_path):
-    old = [tmp_path / "tree_Second.txt", tmp_path / "tree_hypsearch_second.log",
-           tmp_path / "tree_Third.txt", tmp_path / "tree_hypsearch_third.pid",
-           tmp_path / "tree_Fourth.txt", tmp_path / "tree_hypsearch_fourth.log",
+    old = [tmp_path / "existing_results.txt", tmp_path / "existing_search.log",
+           tmp_path / "another_results.txt", tmp_path / "existing_search.pid",
+           tmp_path / "tree_anchor_local_global.txt", tmp_path / "tree_hypsearch_anchor_local_global.log",
            tmp_path / "tree_klein_exp0" / "klein_encoder_best.pt"]
     for path in old:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -146,15 +146,15 @@ def test_repeated_and_concurrent_run_creation_preserves_old_files(tmp_path):
         manifests = list(pool.map(lambda _: make_run(tmp_path, count=1), range(8)))
     assert len({m["paths"]["run_dir"] for m in manifests}) == 8
     for manifest in manifests:
-        assert "Fourth_" in manifest["paths"]["run_dir"]
-        assert Path(manifest["paths"]["results"]).name == "tree_Fourth.txt"
-        assert Path(manifest["paths"]["log"]).name == "tree_hypsearch_fourth.log"
+        assert "anchor_local_global_" in manifest["paths"]["run_dir"]
+        assert Path(manifest["paths"]["results"]).name == "tree_anchor_local_global.txt"
+        assert Path(manifest["paths"]["log"]).name == "tree_hypsearch_anchor_local_global.log"
     assert all(path.read_bytes() == b"old results must survive" for path in old)
 
 
 def test_explicit_result_path_exclusive_claim_and_atomic_update(tmp_path):
     spec = common.search_spec("tree")
-    destination = tmp_path / "custom_Fourth.txt"
+    destination = tmp_path / "custom_anchor_local_global.txt"
     options = common.build_parser(spec).parse_args(["--log-dir", str(tmp_path), "--results-file", str(destination)])
     rows = common.generate_experiments(spec, options)
     runtime.create_run(spec, options, rows)
@@ -174,17 +174,13 @@ def test_explicit_result_path_exclusive_claim_and_atomic_update(tmp_path):
     common.save_results(spec, options, [])  # The owning run may update itself.
 
 
-def test_fourth_manifest_hashes_its_active_frozen_third_baselines(tmp_path):
+def test_manifest_hashes_its_active_search_anchors(tmp_path):
     manifest = make_run(tmp_path, count=1)
-    name = "configs/hyperparam_search_baselines_fourth.json"
+    name = "flow_klein/experiments/anchors.py"
     expected_hash = hashlib.sha256((runtime.REPOSITORY / name).read_bytes()).hexdigest()
     assert manifest["source_hashes"][name] == expected_hash
-    assert manifest["baseline_source"]["source_round"] == "Third"
     assert manifest["baseline_source"]["completed"] == 60
     assert manifest["experiments"][0]["source_exp_id"] == 45
-    # Historical Second-based anchors remain available as an unchanged file.
-    historical = runtime.read_json(runtime.REPOSITORY / "configs/hyperparam_search_baselines.json")
-    assert [row["source_exp_id"] for row in historical["datasets"]["tree"]["anchors"]] == [39, 16, 27]
 
 
 @pytest.mark.parametrize("dataset", ["tree", "planar"])
@@ -218,7 +214,7 @@ def test_real_subprocess_scheduler_concurrency_failures_and_results(tmp_path, fa
     assert status["state"] == "completed_with_failures" and status["completed"] == 8
     assert status["active"] == status["pending"] == []
     report = Path(manifest["paths"]["results"]).read_text()
-    assert "Completed: 8/8" in report and "Round: Fourth" in report
+    assert "Completed: 8/8" in report and "Search method: anchor_local_global" in report
     assert "N/A" in report and "code 23" in report and "CUDA_VISIBLE_DEVICES=GPU-fake-" in report
 
 
@@ -305,13 +301,13 @@ def test_worker_reserves_model_directory_and_uses_logical_device(tmp_path, monke
 
 
 @pytest.mark.parametrize("dataset", ["planar", "tree"])
-def test_python_and_bash_dry_runs_use_fourth_without_output_writes(tmp_path, dataset):
+def test_python_and_bash_dry_runs_use_anchor_local_global_without_output_writes(tmp_path, dataset):
     entry = runtime.REPOSITORY / "scripts" / (dataset + "_hypsearch.py")
     direct = subprocess.check_output([sys.executable, "-B", str(entry), "--dry-run", "--log-dir", str(tmp_path)], universal_newlines=True)
     plan = json.loads(direct)
-    assert plan["round"] == "Fourth" and plan["results_name"] == dataset + "_Fourth.txt"
+    assert plan["search_method"] == "anchor_local_global" and plan["results_name"] == dataset + "_anchor_local_global.txt"
     assert plan["sampling_counts"] == dict(baseline=3, local=93, random=24)
-    bash = shutil.which("bash") or (r"C:\Program Files\Git\bin\bash.exe" if os.name == "nt" else None)
+    bash = shutil.which("bash")
     if bash and Path(bash).exists():
         shell = subprocess.check_output([bash, str(runtime.REPOSITORY / "scripts" / (dataset + "_hypsearch.sh")),
                                          "--dry-run", "--log-dir", str(tmp_path)], universal_newlines=True,
@@ -341,19 +337,19 @@ def test_real_foreground_entry_reports_unavailable_gpu_without_training(tmp_path
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=45,
     )
     assert completed.returncode == 1
-    assert "tree Fourth controller started" in completed.stdout
-    manifests = list(tmp_path.glob("tree/Fourth_*/manifest.json"))
+    assert "tree anchor_local_global controller started" in completed.stdout
+    manifests = list(tmp_path.glob("tree/anchor_local_global_*/manifest.json"))
     assert len(manifests) == 1
     manifest = runtime.read_json(manifests[0])
     assert runtime.read_json(manifest["paths"]["status"])["state"] == "failed"
-    assert "Round: Fourth" in Path(manifest["paths"]["log"]).read_text()
+    assert "Search method: anchor_local_global" in Path(manifest["paths"]["log"]).read_text()
     assert "Run status: failed" in Path(manifest["paths"]["results"]).read_text()
     assert int(Path(manifest["paths"]["pid"]).read_text()) > 0
     assert not list(Path(manifest["paths"]["run_dir"]).glob("experiments/*"))
 
 
 def test_explicit_result_path_has_one_owner_under_concurrent_startup(tmp_path):
-    destination = tmp_path / "shared_Fourth.txt"
+    destination = tmp_path / "shared_anchor_local_global.txt"
     def start(_):
         options = common.build_parser(common.search_spec("tree")).parse_args([
             "--num-experiments", "1", "--log-dir", str(tmp_path), "--results-file", str(destination)])
@@ -365,7 +361,7 @@ def test_explicit_result_path_has_one_owner_under_concurrent_startup(tmp_path):
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(start, range(4)))
     assert sum(result is not None for result in results) == 1
-    assert "Round: Fourth" in destination.read_text()
+    assert "Search method: anchor_local_global" in destination.read_text()
 
 
 def test_nonfinite_required_metrics_fail_but_undefined_tree_ratios_are_absent():

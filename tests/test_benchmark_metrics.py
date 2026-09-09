@@ -10,7 +10,7 @@ import networkx as nx
 import numpy as np
 import pytest
 
-from flow_klein.evaluation import v0901 as metrics
+from flow_klein.evaluation import structural as metrics
 
 
 def test_profile_routing_keeps_old_datasets_unchanged():

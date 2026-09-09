@@ -1,8 +1,5 @@
+"""Structure-conditioned graph training, Flow Matching, and constrained decoding."""
 from flow_klein.paths import OUTPUT_ROOT
-"""
-Klein GraphTask V2: graph generation with structural encoder/decoder upgrades
-and conditional Klein flow matching.
-"""
 
 import logging
 import os
@@ -17,18 +14,18 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 
-from flow_klein.data.v0901 import Datasets, list_graph_loader, data_split, BFS, structural_BFS
+from flow_klein.data.structural import Datasets, list_graph_loader, data_split, BFS, structural_BFS
 from flow_klein.models.kernels import kernel
-from flow_klein.models.v0901 import KleinEncoder, KleinGraphVAE, MaskedGraphDecoder
+from flow_klein.models.structural import KleinEncoder, KleinGraphVAE, MaskedGraphDecoder
 from flow_klein.models.flow_matching import KleinFlowMatching
 from flow_klein.geometry.klein import Klein
 from flow_klein.evaluation.spectre import degree_stats, clustering_stats, spectral_stats
-from flow_klein.data.benchmarks_v0901 import (
+from flow_klein.data.benchmarks_structural import (
     is_benchmark_dataset,
     load_benchmark_splits,
     normalize_benchmark_name,
 )
-from flow_klein.evaluation.v0901 import (
+from flow_klein.evaluation.structural import (
     compute_vun,
     evaluate_external_benchmark,
     evaluation_profile,
@@ -54,19 +51,12 @@ def _write_metrics_json(args, results, graph_save_path, timestamp):
 
 
 def load_data(args):
-    """Load and prepare graph dataset.
-
-    Returns:
-        list_graphs       — Datasets built from train-core graphs only.
-        list_test_graphs  — Datasets built from held-out test graphs.
-        val_adj           — held-out validation adjacencies (disjoint from train-core).
-        test_list_adj     — raw held-out test adjacencies.
-        train_core_adj    — raw train-core adjacencies (used to fit DatasetProfile).
-
-    Plan.md Step 2: previously `val_adj = list_adj[:N]` was a slice of the
-    training set, not held out. We now carve a deterministic disjoint slice
-    out of `list_adj` BEFORE building `list_graphs`.
-    """
+    """Prepare dataset-specific training, validation, and test graph collections.
+    
+    Returns the training dataset, test dataset, validation adjacencies, test
+    adjacencies, and training adjacencies. Benchmark datasets use predefined
+    splits. Grid reserves a deterministic validation subset before fitting
+    features and training-set structural profiles."""
     dataset = args.dataset
     dataset_kwargs = {
         "node_feat_mode": getattr(args, "node_feat_mode", "struct"),
@@ -162,12 +152,12 @@ def load_data(args):
 
     if getattr(args, "assert_disjoint_val", True):
         assert set(train_idx).isdisjoint(set(val_idx)), \
-            "Plan.md regression: train-core and val indices must be disjoint."
+            "Training and validation indices must be disjoint."
 
     train_core_adj = [list_adj_tv[i] for i in train_idx]
     val_adj = [list_adj_tv[i] for i in val_idx] if n_val > 0 else []
     list_x_train = [list_x_tv[i] for i in train_idx] if list_x_tv is not None else None
-    list_label_train = None  # data_split returns None upstream for label_train
+    list_label_train = None  # Graph generation does not require class labels.
 
     list_graphs = Datasets(
         train_core_adj, self_for_none, list_x_train, list_label_train,
@@ -283,8 +273,8 @@ def compute_soft_degree_histogram(
     n_bins: int = 32,
     bandwidth: float = None,
 ) -> torch.Tensor:
-    """Differentiable soft degree histogram (Plan.md Intervention 6).
-
+    """Differentiable soft degree histogram.
+    
     Args:
         pair_probs: (B, N, N) sigmoid probabilities (already pair-masked).
         pair_mask: (B, N, N) pairwise validity mask with diagonal zeroed.
@@ -295,23 +285,12 @@ def compute_soft_degree_histogram(
         n_bins: number of histogram bins.
         bandwidth: Gaussian bin width. When None, defaults to
             `0.75 * (max_degree / (n_bins - 1))` so adjacent bins overlap.
-
+    
     Returns:
         (B, n_bins) row-normalized soft histograms.
-
-    Why the rewrite (was: per-graph rescaling to [0, n-1]):
-      The previous version mapped degrees into bin indices using `(n-1)` as
-      the per-graph scale. Because `adj_probs` stays at ~0.3-0.5 across many
-      pairs during early/mid training (high pos_weight keeps the BCE there),
-      `soft_deg = sum(adj_probs)` is many times the true degree. After
-      per-graph rescaling the pred-hist mass landed far from the target-hist
-      mass, so the L1 distance was always pinned at its maximum (~2.0) and
-      no gradient flowed.
-
-      Anchoring bin centers to a dataset-aware `max_degree` keeps both
-      histograms in the SAME natural-degree coordinate, so the L1 distance
-      reacts to actual degree distribution overlap and the loss can flow.
-    """
+    
+    Predicted and target histograms share the same degree coordinates,
+    so their L1 distance measures distribution overlap on a common scale."""
     masked_probs = pair_probs * pair_mask
     soft_deg = masked_probs.sum(dim=-1)  # (B, N), natural degree scale
 
@@ -338,13 +317,11 @@ def calibrate_edge_probabilities_to_budget(
     temperature: float = 0.5,
     bisection_steps: int = 40,
 ) -> torch.Tensor:
-    """Return symmetric soft adjacencies whose expected edge count matches E.
-
-    The weighted edge BCE used by the legacy model is useful for ranking sparse
-    edges but leaves sigmoid probabilities poorly calibrated.  A detached
-    per-graph threshold is found by bisection; gradients still flow through the
-    shifted logits.  Only constrained benchmark recipes enable this helper.
-    """
+    """Return symmetric soft adjacencies with the requested expected edge count.
+    
+    A detached per-graph threshold is found by bisection to calibrate the
+    weighted-BCE logits. Gradients flow through the shifted logits. This
+    calibration is enabled by the constrained benchmark configurations."""
     if adj_logits.ndim != 3 or adj_logits.shape[-1] != adj_logits.shape[-2]:
         raise ValueError(f"Expected square batched logits, got {adj_logits.shape}")
     temperature = max(float(temperature), 1e-3)
@@ -398,7 +375,7 @@ def compute_kernel_matching_loss(reconstructed_adj, target_kernel_val, kernel_mo
     return alpha * kernel_loss
 
 
-def compute_vae_loss_v2(
+def compute_vae_loss(
     adj_logits,
     adj_probs,
     target_adj,
@@ -422,12 +399,11 @@ def compute_vae_loss_v2(
     degree_hist_budget_calibration=False,
     degree_hist_temperature=0.5,
 ):
-    """Compute V2 reconstruction loss with node masking and auxiliary stats.
-
-    Plan.md additions:
-      - degree_reg_weight: per-node degree regression (Smooth-L1).
-      - degree_aux_weight: differentiable degree-histogram L1 (Intervention 6).
-    """
+    """Compute masked reconstruction and auxiliary graph-structure losses.
+    
+    The loss includes node and edge reconstruction, graph-level statistics,
+    latent regularization, per-node Smooth-L1 degree regression, and an L1
+    penalty on differentiable degree histograms, weighted by the configuration."""
     diag_idx = torch.arange(target_adj.shape[-1], device=target_adj.device)
     target_adj = target_adj.clone().float()
     target_adj[:, diag_idx, diag_idx] = 0.0
@@ -462,7 +438,7 @@ def compute_vae_loss_v2(
         alpha=kernel_weight,
     )
 
-    # -------- Plan.md degree regression --------
+    # -------- Degree regression --------
     if degree_pred is not None and degree_reg_weight > 0:
         with torch.no_grad():
             target_deg = (target_adj * pair_mask).sum(dim=-1).float()
@@ -477,7 +453,7 @@ def compute_vae_loss_v2(
     else:
         degree_reg_loss = adj_logits.new_tensor(0.0)
 
-    # -------- Plan.md soft degree histogram (Intervention 6) --------
+    # -------- Soft degree histogram --------
     if degree_aux_weight > 0:
         # Bin scale is dataset-aware: callers pass `degree_hist_max` from
         # DatasetProfile (mean max_degree + 2 std). Fallback to a per-batch
@@ -729,14 +705,11 @@ def benchmark_validation_metrics(args, real_graphs, pred_graphs, train_graphs):
 def vae_validation_metrics(
     args, model, val_graphs, val_adj, profile, device, train_core_adj=None
 ):
-    """Score teacher-forced reconstructions on the validation set.
-
-    Planar/Tree use V.U.N. then the lightweight Ratio proxy; legacy datasets
-    use lowest average MMD.
-    val_graphs must be a Datasets-like object with the SAME feature_size and
-    max_num_nodes as the training set, so the encoder receives a shape-matched
-    input. Falls back to inf-MMD if val_graphs is empty or None.
-    """
+    """Evaluate teacher-forced reconstructions on validation graphs.
+    
+    Planar and Tree rank by V.U.N. followed by a structural-ratio proxy;
+    Grid uses average MMD. Validation features and padding dimensions must
+    match the training dataset. Missing validation data produces infinite MMD."""
     model.eval()
     if val_graphs is None or len(val_graphs.list_adjs) == 0:
         return {"degree": float("inf"), "clustering": float("inf"),
@@ -850,11 +823,9 @@ def flow_validation_metrics(
     condition_profile_bank=None,
     train_core_adj=None,
 ):
-    """Sample N=len(val_subset) graphs from the flow and score against val.
-
-    Plan.md Step 9 (flow side). Cheap variant: we do NOT do candidate reranking
-    here. Reranking is final-eval-only.
-    """
+    """Generate a validation-sized sample and compare it with validation graphs.
+    
+    Candidate reranking is reserved for final evaluation to limit validation cost."""
     cap = int(getattr(args, "val_eval_subset", 0) or 0)
     val_adj_use = _val_subset(val_adj, cap)
     real_graphs = [_adj_to_nx(a) for a in val_adj_use if a is not None]
@@ -953,16 +924,11 @@ def rerank_candidates_by_profile(
 
 
 def train_klein_encoder(args, list_graphs, val_adj, train_core_adj, val_graphs, device):
-    """Train the upgraded Klein encoder/decoder stack.
-
-    Plan.md Interventions wired here:
-      - GIN-style encoder (Step 3, automatic via KleinEncoder).
-      - Structural conditioning (Step 4): builds DatasetProfile from
-        train-core-only adjacencies and threads profile_vec per batch.
-      - Degree head + degree regression (Step 5).
-      - Soft degree-histogram aux loss (Step 6).
-      - Validation-based checkpoint selection (Step 9).
-    """
+    """Train the graph autoencoder with structural conditioning.
+    
+    Structural profiles are fitted on training graphs only. The objective
+    combines reconstruction and auxiliary degree losses. Validation scores
+    determine checkpoint selection when validation is enabled."""
     print("\n" + "=" * 60)
     print("Phase 1: Training Klein Encoder")
     print("=" * 60)
@@ -981,7 +947,7 @@ def train_klein_encoder(args, list_graphs, val_adj, train_core_adj, val_graphs, 
     use_struct_cond = bool(getattr(args, "use_struct_cond", True))
     struct_cond_dim = int(getattr(args, "struct_cond_dim", 32))
 
-    # ---- Fit DatasetProfile on train-core (Plan.md Step 1/2 boundary) ----
+    # ---- Fit DatasetProfile on train-core ----
     profile = DatasetProfile(n_bins=32)
     profile.fit(train_core_adj)
     torch.save(profile.state_dict(), graph_save_path + "dataset_profile.pt")
@@ -1108,7 +1074,7 @@ def train_klein_encoder(args, list_graphs, val_adj, train_core_adj, val_graphs, 
             )
 
             stats_target = compute_graph_batch_stats(subgraphs, node_mask)
-            losses = compute_vae_loss_v2(
+            losses = compute_vae_loss(
                 adj_logits=adj_logits,
                 adj_probs=reconstructed_adj,
                 target_adj=subgraphs,
@@ -1149,7 +1115,7 @@ def train_klein_encoder(args, list_graphs, val_adj, train_core_adj, val_graphs, 
             torch.save(best_embeddings, graph_save_path + f'{epoch}_klein_feat.pt')
             torch.save(best_cond_codes, graph_save_path + f'{epoch}_cond_feat.pt')
 
-            # Plan.md Step 9: validation-based checkpoint selection.
+            # validation-based checkpoint selection.
             if val_graphs is not None and len(val_adj) > 0:
                 val_metrics = vae_validation_metrics(
                     args,
@@ -1236,14 +1202,11 @@ def train_klein_flow_matching(
     encoder_model=None, val_adj=None, profile=None, condition_profile_bank=None,
     train_core_adj=None,
 ):
-    """Train conditional Klein Flow Matching.
-
-    Plan.md Step 8: set_latent_stats uses train-core encodings exclusively
-    (this function is now only ever called with train-core embeddings —
-    upstream call site enforces it).
-    Plan.md Step 9: optional validation-based checkpointing of the flow model
-    when `encoder_model`, `val_adj`, and `profile` are supplied.
-    """
+    """Fit conditional Flow Matching to training-set graph encodings.
+    
+    Latent normalization statistics are estimated from training embeddings.
+    The encoder, validation graphs, and structural profile support optional
+    validation-based selection of the Flow Matching checkpoint."""
     print("\n" + "=" * 60)
     print("Phase 2: Training Klein Flow Matching")
     print("=" * 60)
@@ -1268,7 +1231,7 @@ def train_klein_flow_matching(
     )
     flow_model.to(device)
 
-    # Plan.md Step 8: set_latent_stats on train-core encodings only.
+    # set_latent_stats on train-core encodings only.
     tangent = flow_model.to_tangent_space(klein_embeddings.to(device))
     flow_model.set_latent_stats(
         tangent.mean(dim=0),
@@ -1303,7 +1266,7 @@ def train_klein_flow_matching(
             epoch_embeddings = klein_embeddings[perm]
             epoch_cond_codes = cond_codes[perm]
         else:
-            # Preserve the historical mutation path for Grid/legacy datasets.
+            # Grid conditions are perturbed in place within the sampled batch.
             klein_embeddings = klein_embeddings[perm]
             cond_codes = cond_codes[perm]
             epoch_embeddings = klein_embeddings
@@ -1331,7 +1294,7 @@ def train_klein_flow_matching(
         if (epoch + 1) % 100 == 0 or epoch == 0:
             print(f"Epoch {epoch + 1}/{epochs}, Loss: {avg_loss:.6f}, LR: {scheduler.get_last_lr()[0]:.6f}")
 
-        # Plan.md Step 9: flow-stage validation checkpointing.
+        # flow-stage validation checkpointing.
         if (
             encoder_model is not None and val_adj is not None and len(val_adj) > 0
             and (epoch + 1) % max(1, flow_val_eval_interval) == 0
@@ -1384,7 +1347,7 @@ def train_klein_flow_matching(
 
 
 def _decode_one_threshold(adj_probs_i, node_probs_i, stats_pred_i, directed, max_nodes):
-    """Legacy 0.5-threshold decoding (kept for ablation)."""
+    """Decode edges at probability 0.5 for threshold-based ablations."""
     predicted_nodes = int(torch.clamp(torch.round(stats_pred_i[0]), 1, max_nodes).item())
     confident_nodes = int(node_probs_i.gt(0.5).sum().item())
     node_count = max(1, min(max_nodes, confident_nodes if confident_nodes > 0 else predicted_nodes))
@@ -1405,7 +1368,7 @@ def _decode_one_topE(
     directed, max_nodes, n_min, n_max,
     rel_tol, abs_tol,
 ):
-    """Top-E edge-budget decoding (Plan.md Intervention 4).
+    """Top-E edge-budget decoding.
 
     1. n = round(stats_pred_i[0]) clamped to [n_min, n_max].
     2. Pick top-n node slots by node_probs.
@@ -1502,7 +1465,7 @@ def _connectivity_repair(
     rel_tol: float,
     abs_tol: int,
 ) -> nx.Graph:
-    """Bridge-aware connectivity repair (Plan.md Intervention 5).
+    """Bridge-aware connectivity repair.
 
     Args:
         G: candidate graph (already on top-n nodes labelled [0..n-1]).
@@ -1911,11 +1874,10 @@ def decode_samples_to_graphs(
     sampled_profile_hist=None,
 ):
     """Convert decoder outputs into NetworkX graphs.
-
-    Plan.md Interventions 4 + 5: top-E decoding + connectivity repair.
-    If args.decode_mode == 'threshold', falls back to legacy 0.5-threshold
-    + largest-CC behavior for ablation.
-    """
+    
+    Top-E decoding uses a predicted edge budget and optional connectivity
+    repair. Threshold decoding uses probability 0.5 and keeps the largest
+    connected component. Dataset configurations select structural constraints."""
     adj_probs_cpu = adj_probs.detach().cpu()
     node_probs = torch.sigmoid(node_logits.detach().cpu())
     stats_pred_cpu = stats_pred.detach().cpu()
@@ -2077,7 +2039,7 @@ def decode_samples_to_graphs(
                 sub_logits = 0.5 * (sub_logits + sub_logits.T)
             G = _connectivity_repair(G, sub_logits, target_E, repair_rel, repair_abs)
         else:
-            # legacy fallback even for topE if repair disabled
+            # Retain the largest connected component when repair is disabled.
             G.remove_edges_from(nx.selfloop_edges(G))
             G.remove_nodes_from(list(nx.isolates(G)))
             if G.number_of_nodes() == 0:
@@ -2100,13 +2062,11 @@ def sample_and_decode(
     profile=None,
     condition_profile_bank=None,
 ):
-    """Sample from conditional Klein flow and decode to graphs.
-
-    Plan.md:
-      - Intervention 6 sampling guards: jointly resample (learned_cond, stats)
-        from the bank with optional Gaussian noise on the learned base.
-      - Top-E + connectivity repair via decode_samples_to_graphs.
-    """
+    """Sample conditional latent vectors and decode graph candidates.
+    
+    Jointly sample learned conditions and structural statistics from the
+    training bank. Optional noise perturbs the learned condition vector.
+    Decoding applies the configured edge budget and connectivity constraints."""
     print("\n" + "=" * 60)
     print("Phase 3: Sampling and Decoding")
     print("=" * 60)
@@ -2252,12 +2212,12 @@ def _evaluate_vun_ratio(
         handle.write("=" * 70 + "\n\n")
         handle.write(f"Dataset: {args.dataset}\n")
         handle.write("Metric profile: vun_ratio\n")
-        handle.write("Split: upstream fixed train=128 val=32 test=40\n")
+        handle.write("Split: benchmark train=128 val=32 test=40\n")
         postprocessing = (
             f"{getattr(args, 'structure_constraint', 'none')} constrained decoding"
             if str(getattr(args, "structure_constraint", "none")).lower()
             in {"planar", "tree"}
-            else "Flow_Klein_0513 Top-E, connectivity repair"
+            else "Top-E decoding with connectivity repair"
         )
         handle.write(
             f"Generation postprocessing: {postprocessing}, profile reranking\n"
@@ -2385,9 +2345,9 @@ def evaluate_and_save_results(
 
 
 def klein_graphtask(args):
-    """Main entry point for Klein GraphTask V2."""
+    """Run graph autoencoder training, Flow Matching, sampling, and evaluation."""
     from flow_klein.paths import prepare_training_args
-    prepare_training_args(args, "v0901")
+    prepare_training_args(args, "structural")
     if is_benchmark_dataset(args.dataset):
         args.dataset = normalize_benchmark_name(args.dataset)
     training_seed = int(getattr(args, "seed", 0))
@@ -2412,12 +2372,12 @@ def klein_graphtask(args):
     )
 
     print("=" * 60)
-    print("Klein GraphTask V2: Graph Generation with Conditional Klein Flow")
+    print("KleinFlow: Graph Generation with Conditional Flow Matching")
     print("=" * 60)
     print(f"Dataset: {args.dataset}")
     print(f"Training seed: {training_seed}")
     if is_benchmark_dataset(args.dataset):
-        print("Split: upstream fixed train=128 val=32 test=40")
+        print("Split: benchmark train=128 val=32 test=40")
     else:
         print(f"Outer split seed: {OUTER_SPLIT_SEED}")
         print(f"Validation split seed: {int(getattr(args, 'split_seed', 1432))}")
@@ -2427,10 +2387,10 @@ def klein_graphtask(args):
     device = torch.device(args.device if torch.cuda.is_available() and args.UseGPU else "cpu")
     print(f"Device: {device}")
 
-    # Plan.md Step 1 hook: apply dataset-specific defaults for any flag the
+    # apply dataset-specific defaults for any flag the
     # user did NOT override on the CLI.
     try:
-        from flow_klein.config.v0901 import apply_klein_dataset_defaults
+        from flow_klein.config.structural import apply_klein_dataset_defaults
         apply_klein_dataset_defaults(args)
     except Exception as exc:
         print(f"[config] dataset-defaults hook skipped ({exc!r})")
@@ -2474,7 +2434,7 @@ def klein_graphtask(args):
     decoder = encoder_model.decoder.to(device)
     decoder.eval()
 
-    # Plan.md Step 10: candidate oversampling + train-profile reranking.
+    # candidate oversampling + train-profile reranking.
     n_target = len(test_list_adj)
     candidate_multiplier = max(1, int(getattr(args, "candidate_multiplier", 3)))
     profile_select = bool(getattr(args, "profile_select", True))

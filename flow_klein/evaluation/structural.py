@@ -15,7 +15,7 @@ from typing import Callable, Dict, Iterable, List, Mapping, Tuple
 import networkx as nx
 import numpy as np
 
-from flow_klein.data.benchmarks_v0901 import normalize_benchmark_name
+from flow_klein.data.benchmarks_structural import normalize_benchmark_name
 from .dist_helper import compute_mmd, gaussian_tv
 from .spectre import clustering_stats, degree_stats, spectral_stats
 

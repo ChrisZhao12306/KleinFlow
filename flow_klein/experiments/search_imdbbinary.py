@@ -1,4 +1,4 @@
-"""Original fixed hyperparameter search for imdbbinary."""
+"""Random hyperparameter search for imdbbinary graph generation."""
 
 import random
 import time
@@ -15,7 +15,7 @@ DATASET = "IMDBBINARY"
 DEVICE = "cuda:1"
 TASK = "klein_graphtask"
 NUM_EXPERIMENTS = 60
-RESULTS_FILE = "IMDBBINARY_Second.txt"
+RESULTS_FILE = "imdbbinary_search.txt"
 FIXED_HYPERPARAMS = {
     'epoch_number': 2000,    # Encoder epochs
     'epoch_diff': 2000,      # Flow matching epochs
@@ -33,12 +33,7 @@ FIXED_HYPERPARAMS = {
     'flow_guidance_scale': 1.2,
 }
 
-# Search space refined from IMDBBINARY_First.txt.
-# Strategy:
-# - Tighten around the strongest first-round region.
-# - Drop values that were consistently weak.
-# - Keep one nearby exploratory option when the best value sits on a boundary
-#   or when the top runs are still spread out.
+# Dataset-specific search ranges and constant training settings.
 HYPERPARAM_GRID = {
     # Encoder architecture/training
     'graphEmDim': [32, 40, 48, 64],
@@ -105,8 +100,8 @@ def generate_random_configs(num_configs: int, seed: int = 42) -> list:
 
 def run_experiment(config: dict, exp_id: int) -> dict:
     """Run a single experiment with given hyperparameters."""
-    from flow_klein.config.fixed import parser
-    from flow_klein.training.fixed import klein_graphtask
+    from flow_klein.config.standard import parser
+    from flow_klein.training.standard import klein_graphtask
     
     # Create argument list
     args_list = [

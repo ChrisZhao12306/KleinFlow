@@ -1,4 +1,4 @@
-"""Original fixed hyperparameter search for ego."""
+"""Random hyperparameter search for ego graph generation."""
 
 import random
 import time
@@ -16,7 +16,7 @@ DATASET = "SynEgo1000_original"
 DEVICE = "cuda:5"
 TASK = "klein_graphtask"
 NUM_EXPERIMENTS = 60
-RESULTS_FILE = "SynEgo1000_original_Second.txt"
+RESULTS_FILE = "ego_search.txt"
 FIXED_HYPERPARAMS = {
     'epoch_number': 2000,    # Encoder epochs
     'epoch_diff': 2000,      # Flow matching epochs
@@ -34,12 +34,7 @@ FIXED_HYPERPARAMS = {
     'flow_guidance_scale': 1.1,
 }
 
-# Narrowed search space based on SynEgo1000_original_First.txt top-ranked runs.
-# The first round suggests:
-# - `batchSize=160` is consistently weak, while `192/224` dominate the top ranks.
-# - `flow_steps=240` and `dit_num_layers=5` underperform.
-# - `decoder_node_dim=128` is clearly stronger than `96`.
-# - Good runs cluster around lower dropout, mid-high encoder lr, and `flow_base_std` in [0.8, 1.0].
+# Dataset-specific search ranges and constant training settings.
 HYPERPARAM_GRID = {
     # Encoder architecture/training
     'graphEmDim': [64, 96, 112],
@@ -106,8 +101,8 @@ def generate_random_configs(num_configs: int, seed: int = 42) -> list:
 
 def run_experiment(config: dict, exp_id: int) -> dict:
     """Run a single experiment with given hyperparameters."""
-    from flow_klein.config.fixed import parser
-    from flow_klein.training.fixed import klein_graphtask
+    from flow_klein.config.standard import parser
+    from flow_klein.training.standard import klein_graphtask
     
     # Create argument list
     args_list = [

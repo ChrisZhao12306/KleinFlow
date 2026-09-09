@@ -10,7 +10,7 @@ import scipy.sparse as sp
 import torch
 
 from flow_klein.data.profile import DatasetProfile
-from flow_klein.training.v0901 import (
+from flow_klein.training.structural import (
     _decode_one_topE,
     blend_degree_targets,
     calibrate_edge_probabilities_to_budget,
@@ -179,7 +179,7 @@ def test_unique_reranking_does_not_consult_training_graphs():
     assert not nx.is_isomorphic(selected[0], selected[1])
 
 
-def test_grid_legacy_top_e_path_is_bit_exact_when_constraint_is_none():
+def test_grid_top_e_decoding_is_bit_exact_when_constraint_is_none():
     probabilities = torch.tensor(
         [
             [0.0, 0.90, 0.80, 0.10],
@@ -233,5 +233,5 @@ def test_grid_legacy_top_e_path_is_bit_exact_when_constraint_is_none():
         stats.unsqueeze(0),
     )
     assert len(decoded) == 1
-    # Legacy cleanup drops the one isolated slot but otherwise keeps Top-E.
+    # Cleanup drops the isolated slot and keeps the remaining Top-E edges.
     assert np.array_equal(nx.to_numpy_array(decoded[0]), expected[:3, :3])

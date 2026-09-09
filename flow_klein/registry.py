@@ -1,4 +1,4 @@
-"""The dataset-to-implementation mapping is fixed for reproducible experiments."""
+"""Dataset specifications for training, preprocessing, and evaluation."""
 from dataclasses import dataclass
 from importlib import import_module
 
@@ -12,15 +12,15 @@ class DatasetSpec:
 
 
 DATASETS = {
-    'planar': DatasetSpec('planar', 'planar', 'v0901', 'vun_ratio'),
-    'tree': DatasetSpec('tree', 'tree', 'v0901', 'vun_ratio'),
-    'grid': DatasetSpec('grid', 'grid', 'v0901', 'degree_clustering_spectral'),
-    'ego': DatasetSpec('ego', 'SynEgo1000_original', 'fixed', 'degree_clustering_spectral'),
-    'community': DatasetSpec('community', 'SynCommunity1000_origin', 'fixed', 'degree_clustering_spectral'),
-    'ego_small': DatasetSpec('ego_small', 'ego_small', 'fixed', 'degree_clustering_orbit'),
-    'community_small': DatasetSpec('community_small', 'community_small', 'fixed', 'degree_clustering_orbit'),
-    'imdbbinary': DatasetSpec('imdbbinary', 'IMDBBINARY', 'fixed', 'degree_clustering_spectral'),
-    'mutag': DatasetSpec('mutag', 'MUTAG', 'fixed', 'degree_clustering_spectral'),
+    'planar': DatasetSpec('planar', 'planar', 'structural', 'vun_ratio'),
+    'tree': DatasetSpec('tree', 'tree', 'structural', 'vun_ratio'),
+    'grid': DatasetSpec('grid', 'grid', 'structural', 'degree_clustering_spectral'),
+    'ego': DatasetSpec('ego', 'SynEgo1000_original', 'standard', 'degree_clustering_spectral'),
+    'community': DatasetSpec('community', 'SynCommunity1000_origin', 'standard', 'degree_clustering_spectral'),
+    'ego_small': DatasetSpec('ego_small', 'ego_small', 'standard', 'degree_clustering_orbit'),
+    'community_small': DatasetSpec('community_small', 'community_small', 'standard', 'degree_clustering_orbit'),
+    'imdbbinary': DatasetSpec('imdbbinary', 'IMDBBINARY', 'standard', 'degree_clustering_spectral'),
+    'mutag': DatasetSpec('mutag', 'MUTAG', 'standard', 'degree_clustering_spectral'),
 }
 ALIASES = {
     'synego1000_origin': 'ego', 'synego1000_original': 'ego', 'synego1000': 'ego',

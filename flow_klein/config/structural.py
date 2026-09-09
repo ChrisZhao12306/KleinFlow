@@ -21,8 +21,7 @@ config_args = {'encoder_training': {'lr': (0.0001, 'learning rate'),
                                'dit_num_heads': (8, 'number of attention heads in DiT'),
                                'dit_num_layers': (6, 'number of DiT blocks/layers'),
                                'use_simple_dit': (False,
-                                                  'use SimpleDiT (MLP-based) instead of full DiT with '
-                                                  'attention'),
+                                                  'reserved argument; ConditionalDiT is used for velocity prediction'),
                                'flow_cond_dropout': (0.1,
                                                      'drop probability for conditional codes during flow '
                                                      'matching training'),
@@ -32,16 +31,16 @@ config_args = {'encoder_training': {'lr': (0.0001, 'learning rate'),
                                'flow_guidance_scale': (1.2,
                                                        'guidance scale for conditional Klein flow sampling')},
  'graph_training': {'epoch_number': (1000, 'maximum number of epochs to train for'),
-                          'graphEmDim': (64, 'the dimention of graph Embeding LAyer; z'),
-                          'graph_save_path': (None, 'the direc to save generated synthatic graphs'),
+                          'graphEmDim': (64, 'dimension of the graph latent representation'),
+                          'graph_save_path': (None, 'output directory for models, graphs, and metrics'),
                           'batchSize': (200,
-                                        'the size of each batch; the number of graphs is the mini batch'),
-                          'UseGPU': (True, 'either use GPU or not if availabel'),
+                                        'number of graphs per minibatch'),
+                          'UseGPU': (True, 'enable GPU execution when available'),
                           'device': ('cuda:0', 'Which device should be used'),
                           'bfsOrdering': (True, 'use bfs for graph permutations'),
-                          'directed': (True, 'is the dataset directed?!'),
+                          'directed': (True, 'treat the dataset as directed'),
                           'node_feat_mode': ('struct',
-                                             'node feature mode for graph generation datasets [legacy, '
+                                             'node feature mode [legacy, '
                                              'struct]'),
                           'lap_pe_dim': (8, 'number of Laplacian positional encoding dimensions'),
                           'cond_dim': (64, 'graph-level conditional code dimension'),
@@ -54,7 +53,7 @@ config_args = {'encoder_training': {'lr': (0.0001, 'learning rate'),
                           'degree_reg_weight': (0.1, 'per-node degree regression weight'),
                           'degree_aux_weight': (0.05, 'soft degree-histogram auxiliary loss weight'),
                           'decode_mode': ('topE',
-                                          'graph-decoding mode: topE (default) or threshold (legacy)'),
+                                          'graph-decoding mode: topE (default) or threshold'),
                           'structure_constraint': ('none', 'hard structural decoder: none, planar, or tree'),
                           'benchmark_ordering': ('none', 'benchmark node ordering: none or structural_bfs'),
                           'degree_profile_blend': (0.0,
@@ -143,7 +142,7 @@ def apply_klein_dataset_defaults(args):
         default_val = _PARSER_DEFAULTS.get(key, None)
         # Parsed CLI namespaces carry exact provenance, so an explicit value
         # equal to a global parser default must still win over the recipe.
-        # Programmatic legacy namespaces fall back to the old value heuristic.
+        # Namespaces without explicit-argument metadata use a default-value comparison.
         should_apply = (
             key not in explicit_args
             if explicit_args is not None

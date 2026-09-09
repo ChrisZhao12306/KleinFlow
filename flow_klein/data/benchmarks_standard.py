@@ -149,7 +149,7 @@ def _validate_split_mapping(
 
 
 def _ggball_split(graphs: List, index_space_size: int = 200) -> Dict[str, List]:
-    """Reproduce GGBall's seed-0 split, including comm20's 200-index quirk."""
+    """Apply the GGBall seed-0 protocol over the specified graph index space."""
     generator = torch.Generator().manual_seed(0)
     indices = torch.randperm(index_space_size, generator=generator)
     test_len = int(round(index_space_size * 0.2))

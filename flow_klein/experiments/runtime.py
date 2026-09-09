@@ -26,8 +26,8 @@ from pathlib import Path
 from flow_klein.paths import ROOT
 from types import SimpleNamespace
 
-from flow_klein.experiments.v0901 import (
-    BASELINE_FILENAME, baseline_snapshot, generate_experiments, run_experiment, save_results,
+from flow_klein.experiments.structural import (
+    baseline_snapshot, generate_experiments, run_experiment, save_results,
     search_spec, validate_metrics,
 )
 
@@ -125,7 +125,7 @@ def worker_environment(binding):
 
 
 def prepare_data(dataset):
-    from flow_klein.data.benchmarks_v0901 import load_benchmark_splits, split_sizes
+    from flow_klein.data.benchmarks_structural import load_benchmark_splits, split_sizes
     splits = load_benchmark_splits(dataset)
     print(f"Prepared {dataset}: {split_sizes(splits)}", flush=True)
 
@@ -133,7 +133,7 @@ def prepare_data(dataset):
 def dependency_probe(dataset, logical_device, include_metrics=True):
     import torch
     # Import the actual training entry point to catch missing DGL etc. early.
-    from flow_klein.training.v0901 import klein_graphtask  # noqa: F401
+    from flow_klein.training.structural import klein_graphtask  # noqa: F401
     if logical_device != "cpu":
         if not torch.cuda.is_available() or torch.cuda.device_count() != 1:
             raise RuntimeError("Isolated CUDA device unavailable; CPU fallback is disabled")
@@ -143,8 +143,8 @@ def dependency_probe(dataset, logical_device, include_metrics=True):
         torch.cuda.synchronize()
         print(f"CUDA probe: {torch.cuda.get_device_name(0)}; logical cuda:0", flush=True)
     if include_metrics:
-        from flow_klein.experiments.v0901 import _training_args, build_parser
-        from flow_klein.evaluation.v0901 import preflight_metric_dependencies
+        from flow_klein.experiments.structural import _training_args, build_parser
+        from flow_klein.evaluation.structural import preflight_metric_dependencies
         prepare_data(dataset)
         preflight_metric_dependencies(dataset)
         spec = search_spec(dataset)
@@ -185,7 +185,7 @@ def create_run(spec, options, experiments):
         raise FileExistsError(f"Refusing to overwrite existing results: {options.results_file}")
     root = Path(options.log_dir).resolve() / spec.dataset
     root.mkdir(parents=True, exist_ok=True)
-    prefix = f"{spec.round_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_"
+    prefix = f"{spec.search_method}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_"
     run_dir = Path(tempfile.mkdtemp(prefix=prefix, dir=str(root))).resolve()
     options.run_dir = str(run_dir)
     options.results_file = os.path.abspath(options.results_file) if options.results_file else str(run_dir / spec.results_file)
@@ -196,7 +196,7 @@ def create_run(spec, options, experiments):
                  pid=str(run_dir / (spec.log_stem + ".pid")),
                  manifest=str(run_dir / "manifest.json"),
                  status=str(run_dir / "status.json"))
-    manifest = dict(version=1, dataset=spec.dataset, round=spec.round_name,
+    manifest = dict(version=1, dataset=spec.dataset, search_method=spec.search_method,
                     created=datetime.now().isoformat(), paths=paths,
                     options=vars(options).copy(), experiments=experiments,
                     search_space=dict(spec.grid), script=str(REPOSITORY / "scripts" / f"{spec.dataset}_hypsearch.py"),
@@ -212,8 +212,8 @@ def create_run(spec, options, experiments):
 
 
 def source_hashes():
-    names = ("flow_klein/experiments/v0901.py", "flow_klein/experiments/runtime.py",
-             "configs/" + BASELINE_FILENAME, "scripts/planar_hypsearch.py",
+    names = ("flow_klein/experiments/structural.py", "flow_klein/experiments/runtime.py",
+             "flow_klein/experiments/anchors.py", "scripts/planar_hypsearch.py",
              "scripts/tree_hypsearch.py", "scripts/search_worker.py")
     return {name: hashlib.sha256((REPOSITORY / name).read_bytes()).hexdigest() for name in names}
 
@@ -430,7 +430,7 @@ def controller_main(manifest_path):
     for sig in (signal.SIGTERM, signal.SIGINT):
         previous_handlers[sig] = signal.signal(sig, stop_preflight)
     try:
-        print(f"Round: {manifest['round']}\nDataset: {manifest['dataset']}\n"
+        print(f"Search method: {manifest['search_method']}\nDataset: {manifest['dataset']}\n"
               f"Script: {manifest['script']}\nPython: {sys.executable}\n"
               f"Repository: {REPOSITORY}\nPaths: {json.dumps(paths)}\n"
               f"Physical devices: {options.devices}\n"
@@ -476,7 +476,7 @@ def launch_search(spec, options):
         return
     experiments = generate_experiments(spec, options)
     if options.dry_run:
-        print(json.dumps(dict(dataset=spec.dataset, round=spec.round_name, physical_devices=devices,
+        print(json.dumps(dict(dataset=spec.dataset, search_method=spec.search_method, physical_devices=devices,
                               results_name=spec.results_file,
                               sampling_counts=dict(Counter(row["kind"] for row in experiments)),
                               search_space=dict(spec.grid), experiments=experiments), indent=2))
@@ -491,7 +491,7 @@ def launch_search(spec, options):
             start_new_session=(os.name == "posix"),
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
-    print(f"{spec.dataset} {spec.round_name} controller started (PID {process.pid}); dependency checks run first.")
+    print(f"{spec.dataset} {spec.search_method} controller started (PID {process.pid}); dependency checks run first.")
     print(f"Physical GPUs: {', '.join(devices)}\nResults: {paths['results']}\n"
           f"Log: {paths['log']}\nPID file: {paths['pid']}\nModels: {paths['run_dir']}/experiments")
     print(f"Monitor: tail -f {shlex.quote(paths['log'])}", flush=True)

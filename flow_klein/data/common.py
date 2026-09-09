@@ -62,7 +62,7 @@ def _compute_structural_node_features(adj_matrix, raw_x, max_num_nodes, lap_pe_d
         adj_matrix = adj_matrix.tocsr().astype(np.float32)
     elif sp.issparse(adj_matrix):
         # NetworkX 3.x returns scipy sparse arrays; convert them back to the
-        # legacy csr_matrix API expected by the rest of this pipeline.
+        # csr_matrix API required by the batching utilities.
         adj_matrix = sp.csr_matrix(adj_matrix, dtype=np.float32)
     else:
         adj_matrix = sp.csr_matrix(np.asarray(adj_matrix, dtype=np.float32))
@@ -145,7 +145,7 @@ def _compute_structural_node_features(adj_matrix, raw_x, max_num_nodes, lap_pe_d
 
 
 def compute_graph_stats_from_adj(adj_matrix):
-    """Return graph-level structural targets used by the V2 auxiliary heads."""
+    """Return graph-level structural targets used by the auxiliary prediction heads."""
     if not sp.issparse(adj_matrix):
         dense_adj = np.asarray(adj_matrix, dtype=np.float32)
     else:

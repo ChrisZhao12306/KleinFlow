@@ -1,14 +1,10 @@
-"""
-Klein Model Components for Graph Encoding and Decoding.
-
-This module provides the V2 encoder/decoder stack used by Klein GraphTask.
-"""
+"""GIN encoders, structural conditioning, and masked graph decoders."""
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import dgl
-from dgl.nn.pytorch.conv import GraphConv
+from dgl.nn.pytorch.conv import GraphConv, GINConv
 
 from flow_klein.geometry.klein import Klein
 from flow_klein.models.layers import node_mlp
@@ -47,12 +43,25 @@ class KleinHNNLayer(nn.Module):
         return self.manifold.proj(h_klein, c=1.0)
 
 
-class ResidualGraphBlock(nn.Module):
-    """Residual graph block with global-context feedback."""
+
+
+class GINResidualBlock(nn.Module):
+    """GIN residual block with masked global-context feedback.
+    
+    A two-layer MLP transforms summed neighbor features. Residual updates,
+    layer normalization, dropout, and a feed-forward network operate on
+    valid node slots; pooled context is broadcast back to each graph."""
 
     def __init__(self, hidden_dim: int, dropout: float = 0.0):
         super().__init__()
-        self.graph_conv = GraphConv(hidden_dim, hidden_dim, allow_zero_in_degree=True)
+        gin_mlp = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim * 2),
+            nn.GELU(),
+            nn.Linear(hidden_dim * 2, hidden_dim),
+        )
+        # 'sum' aggregation is the standard GIN choice (Xu et al., 2019).
+        # learn_eps=True lets the model balance self vs neighbor sum.
+        self.gin = GINConv(apply_func=gin_mlp, aggregator_type='sum', learn_eps=True)
         self.norm1 = nn.LayerNorm(hidden_dim)
         self.norm2 = nn.LayerNorm(hidden_dim)
         self.dropout = nn.Dropout(dropout)
@@ -77,7 +86,7 @@ class ResidualGraphBlock(nn.Module):
         batch_size: list
     ) -> torch.Tensor:
         residual = x
-        x = self.graph_conv(graph, x)
+        x = self.gin(graph, x)
         x = self.norm1(residual + self.dropout(F.gelu(x)))
 
         batch_graphs, max_nodes = batch_size
@@ -114,9 +123,13 @@ class AttentionReadout(nn.Module):
 
 
 class KleinEncoder(nn.Module):
-    """
-    Graph encoder with residual graph blocks, masked pooling, and conditional outputs.
-    """
+    """Encode graphs into Klein latent variables and conditioning vectors.
+    
+    GIN residual blocks feed masked graph pooling. When structural
+    conditioning is enabled, a statistics MLP projects the graph profile
+    and concatenates it with the learned condition vector. The resulting
+    condition width is cond_dim + struct_cond_dim. Latent means are mapped
+    through the exponential map at the origin and projected into the Klein ball."""
 
     def __init__(
         self,
@@ -128,12 +141,20 @@ class KleinEncoder(nn.Module):
         encoder_blocks: int = 4,
         input_proj_dim: int = 64,
         aux_stat_dim: int = 6,
+        use_struct_cond: bool = False,
+        profile_stat_dim: int = 0,
+        struct_cond_dim: int = 0,
     ):
         super().__init__()
         self.manifold = Klein()
         self.graph_latent_dim = graph_latent_dim
         self.cond_dim = cond_dim
         self.aux_stat_dim = aux_stat_dim
+        self.use_struct_cond = bool(use_struct_cond) and struct_cond_dim > 0 and profile_stat_dim > 0
+        self.struct_cond_dim = int(struct_cond_dim) if self.use_struct_cond else 0
+        self.profile_stat_dim = int(profile_stat_dim) if self.use_struct_cond else 0
+        # Total cond_dim handed to flow + decoder.
+        self.full_cond_dim = self.cond_dim + self.struct_cond_dim
 
         hidden_layers = hidden_layers or [128, 128, 128, 128]
         hidden_dim = hidden_layers[0]
@@ -145,7 +166,7 @@ class KleinEncoder(nn.Module):
             nn.Linear(input_proj_dim, hidden_dim),
         )
         self.blocks = nn.ModuleList(
-            [ResidualGraphBlock(hidden_dim, dropout=dropout) for _ in range(encoder_blocks)]
+            [GINResidualBlock(hidden_dim, dropout=dropout) for _ in range(encoder_blocks)]
         )
         self.readout_attn = AttentionReadout(hidden_dim)
         self.readout_proj = nn.Sequential(
@@ -160,6 +181,15 @@ class KleinEncoder(nn.Module):
             nn.GELU(),
             nn.Linear(hidden_dim, cond_dim),
         )
+        if self.use_struct_cond:
+            self.stats_mlp = nn.Sequential(
+                nn.LayerNorm(self.profile_stat_dim),
+                nn.Linear(self.profile_stat_dim, self.struct_cond_dim * 2),
+                nn.GELU(),
+                nn.Linear(self.struct_cond_dim * 2, self.struct_cond_dim),
+            )
+        else:
+            self.stats_mlp = None
         self.mean_layer = node_mlp(hidden_dim, [graph_latent_dim])
         self.log_std_layer = node_mlp(hidden_dim, [graph_latent_dim])
         self.aux_head = nn.Sequential(
@@ -175,6 +205,7 @@ class KleinEncoder(nn.Module):
         batch_size: list,
         node_mask: torch.Tensor = None,
         return_euclidean: bool = False,
+        profile_vec: torch.Tensor = None,
     ):
         batch_graphs, max_nodes = batch_size
         if node_mask is None:
@@ -193,7 +224,20 @@ class KleinEncoder(nn.Module):
         max_pool = masked_max(h, node_mask)
         graph_repr = self.readout_proj(torch.cat([attn_pool, mean_pool, max_pool], dim=-1))
 
-        cond_code = self.cond_head(graph_repr)
+        learned_cond = self.cond_head(graph_repr)
+        if self.use_struct_cond:
+            if profile_vec is None:
+                # Use zero structural features when no profile vector is provided.
+                # Use zeros — the struct head still consumes them so cond_dim is consistent.
+                profile_vec = torch.zeros(
+                    learned_cond.shape[0], self.profile_stat_dim,
+                    device=learned_cond.device, dtype=learned_cond.dtype,
+                )
+            struct_cond = self.stats_mlp(profile_vec)
+            cond_code = torch.cat([learned_cond, struct_cond], dim=-1)
+        else:
+            cond_code = learned_cond
+
         mean = self.mean_layer(graph_repr, activation=lambda x: x)
         log_std = self.log_std_layer(graph_repr, activation=lambda x: x)
         aux_stats = self.aux_head(graph_repr)
@@ -249,6 +293,15 @@ class MaskedGraphDecoder(nn.Module):
             nn.Linear(node_dim * 2, node_dim),
         )
         self.node_head = nn.Sequential(
+            nn.LayerNorm(node_dim),
+            nn.Linear(node_dim, node_dim // 2),
+            nn.GELU(),
+            nn.Linear(node_dim // 2, 1),
+        )
+
+        # Predict a degree for each valid node slot.
+        # Softplus is applied in forward() to ensure non-negative degrees.
+        self.degree_head = nn.Sequential(
             nn.LayerNorm(node_dim),
             nn.Linear(node_dim, node_dim // 2),
             nn.GELU(),
@@ -311,7 +364,9 @@ class MaskedGraphDecoder(nn.Module):
             edge_logits = edge_logits.masked_fill(pair_mask < 0.5, -20.0)
 
         stats_pred = self.stats_head(latent_cond)
-        return edge_logits, node_logits, stats_pred
+        # per-node degree head.
+        degree_pred = F.softplus(self.degree_head(slots)).squeeze(-1)
+        return edge_logits, node_logits, stats_pred, degree_pred
 
 
 class KleinGraphVAE(nn.Module):
@@ -332,8 +387,11 @@ class KleinGraphVAE(nn.Module):
         self.auto_encoder = auto_encoder
         self.embeding_dim = encoder.graph_latent_dim
 
-    def encode(self, graph, features, batch_size, node_mask=None):
-        return self.encoder(graph, features, batch_size, node_mask=node_mask)
+    def encode(self, graph, features, batch_size, node_mask=None, profile_vec=None):
+        return self.encoder(
+            graph, features, batch_size,
+            node_mask=node_mask, profile_vec=profile_vec,
+        )
 
     def decode(self, z_klein: torch.Tensor, cond_code: torch.Tensor, node_mask: torch.Tensor = None):
         z_tangent = self.manifold.logmap0(z_klein, c=1.0)
@@ -349,12 +407,12 @@ class KleinGraphVAE(nn.Module):
         z_klein = self.manifold.expmap0(z_tangent, c=1.0)
         return self.manifold.proj(z_klein, c=1.0)
 
-    def forward(self, graph, features, batch_size, node_mask=None):
+    def forward(self, graph, features, batch_size, node_mask=None, profile_vec=None):
         h_klein, mean, log_std, cond_code, encoder_aux = self.encode(
-            graph, features, batch_size, node_mask=node_mask
+            graph, features, batch_size, node_mask=node_mask, profile_vec=profile_vec,
         )
         samples = self.reparameterize(mean, log_std)
-        edge_logits, node_logits, stats_pred = self.decode(
+        edge_logits, node_logits, stats_pred, degree_pred = self.decode(
             samples, cond_code, node_mask=node_mask
         )
         reconstructed_adj = torch.sigmoid(edge_logits)
@@ -363,6 +421,7 @@ class KleinGraphVAE(nn.Module):
             "node_logits": node_logits,
             "stats_pred": stats_pred,
             "encoder_aux": encoder_aux,
+            "degree_pred": degree_pred,
         }
 
         return reconstructed_adj, samples, mean, log_std, cond_code, aux_preds, edge_logits

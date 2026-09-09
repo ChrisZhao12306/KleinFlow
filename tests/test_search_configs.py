@@ -10,13 +10,13 @@ import pytest
 
 from flow_klein.config.cli import parse_args
 from flow_klein.registry import dataset_spec
-from flow_klein.experiments import fixed, v0901
+from flow_klein.experiments import standard, structural
 
-CONTRACTS = json.loads((Path(__file__).parent / 'fixtures/source_contracts.json').read_text())
+CONTRACTS = json.loads((Path(__file__).parent / 'fixtures/reference_contracts.json').read_text())
 
 
 @pytest.mark.parametrize('dataset', ['grid', 'ego', 'community', 'imdbbinary', 'mutag'])
-def test_original_random_search_and_training_arguments(dataset, tmp_path, monkeypatch):
+def test_seeded_random_search_and_training_arguments(dataset, tmp_path, monkeypatch):
     module = import_module('flow_klein.experiments.search_' + dataset)
     for name, expected in CONTRACTS['search_constants'][dataset].items():
         assert getattr(module, name) == expected
@@ -46,13 +46,13 @@ def test_original_random_search_and_training_arguments(dataset, tmp_path, monkey
 
 @pytest.mark.parametrize('dataset', ['planar', 'tree', 'ego_small', 'community_small'])
 def test_benchmark_search_parameters_survive_parsing(dataset, tmp_path):
-    module = v0901 if dataset in {'planar', 'tree'} else fixed
+    module = structural if dataset in {'planar', 'tree'} else standard
     spec = module.search_spec(dataset)
     options = module.build_parser(spec).parse_args([])
     options.device = 'cpu'
     options.log_dir = str(tmp_path)
     options.graph_save_path = str(tmp_path / 'model')
-    if module is v0901:
+    if module is structural:
         configs = [row['config'] for row in module.generate_experiments(spec, options)]
     else:
         configs = module.generate_random_configs(spec.grid, options.num_experiments, options.search_seed)

@@ -13,7 +13,7 @@ from typing import Dict, Iterable, List, Tuple
 import networkx as nx
 import numpy as np
 
-from flow_klein.data.benchmarks_fixed import normalize_benchmark_name
+from flow_klein.data.benchmarks_standard import normalize_benchmark_name
 from .dist_helper import compute_mmd, gaussian_tv
 from .spectre import clustering_stats, degree_stats
 
@@ -199,4 +199,4 @@ def evaluate_external_benchmark(
             "avg_mmd": (degree + clustering + orbit) / 3.0,
         }
 
-    raise ValueError("Unsupported fixed benchmark: " + str(dataset))
+    raise ValueError("Unsupported small-graph benchmark: " + str(dataset))

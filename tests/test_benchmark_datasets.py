@@ -7,7 +7,7 @@ from unittest import mock
 
 import networkx as nx
 
-from flow_klein.data.benchmarks_v0901 import (
+from flow_klein.data.benchmarks_structural import (
     _download_once,
     load_benchmark_splits,
     normalize_benchmark_name,
@@ -24,8 +24,8 @@ def test_downloader_uses_curl_and_reuses_cache(tmp_path: Path):
         output = Path(command[command.index("-o") + 1])
         output.write_bytes(b"pickle-data")
 
-    with mock.patch("flow_klein.data.benchmarks_v0901.shutil.which", return_value="/usr/bin/curl"), \
-            mock.patch("flow_klein.data.benchmarks_v0901.subprocess.run", side_effect=fake_run) as run:
+    with mock.patch("flow_klein.data.benchmarks_structural.shutil.which", return_value="/usr/bin/curl"), \
+            mock.patch("flow_klein.data.benchmarks_structural.subprocess.run", side_effect=fake_run) as run:
         assert _download_once("https://example.test/planar.pkl", destination) == destination
         assert _download_once("https://example.test/planar.pkl", destination) == destination
 

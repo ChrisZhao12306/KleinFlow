@@ -1,4 +1,4 @@
-"""Dispatch searches without combining the original sampling algorithms."""
+"""Dataset-aware entry point for random and anchor-based hyperparameter search."""
 import argparse
 import json
 import sys
@@ -9,10 +9,10 @@ from flow_klein.paths import search_directory
 from flow_klein.registry import dataset_spec
 
 
-def run_legacy_search(dataset, argv):
+def run_random_search(dataset, argv):
     spec = dataset_spec(dataset)
     module = import_module('flow_klein.experiments.search_' + spec.name)
-    parser = argparse.ArgumentParser(description='Original {} search for {}'.format(spec.pipeline, spec.name))
+    parser = argparse.ArgumentParser(description='KleinFlow hyperparameter search for {}'.format(spec.name))
     parser.add_argument('--device', default=module.DEVICE)
     parser.add_argument('--num-experiments', type=int, default=module.NUM_EXPERIMENTS)
     parser.add_argument('--epoch-number', type=int, default=None)
@@ -58,9 +58,9 @@ def main(argv=None, dataset=None):
     except ValueError as exc:
         raise SystemExit(str(exc))
     if spec.name in {'planar', 'tree'}:
-        from flow_klein.experiments.v0901 import run_search
+        from flow_klein.experiments.structural import run_search
         return run_search(spec.name, argv)
     if spec.name in {'ego_small', 'community_small'}:
-        from flow_klein.experiments.fixed import run_search
+        from flow_klein.experiments.standard import run_search
         return run_search(spec.name, argv)
-    return run_legacy_search(spec.name, argv)
+    return run_random_search(spec.name, argv)

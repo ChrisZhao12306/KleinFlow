@@ -1,18 +1,14 @@
 import random
-import os
-import pickle as pkl
 import warnings
 import networkx as nx
 import numpy as np
 import scipy
 import scipy.sparse as sp
-from scipy.sparse import csr_matrix, lil_matrix
+from scipy.sparse import lil_matrix
 import torch
 
-from flow_klein.paths import DATA_ROOT
-from flow_klein.data.common import BFS, _compute_structural_node_features, _ensure_csr_adj, compute_graph_stats_from_adj, data_split
-from flow_klein.data.benchmarks_fixed import is_benchmark_dataset, load_benchmark_splits
-import dgl
+from flow_klein.data.common import BFS, _compute_structural_node_features, _ensure_csr_adj, compute_graph_stats_from_adj, data_split, grid
+from flow_klein.data.benchmarks_structural import is_benchmark_dataset, load_benchmark_splits
 
 class Datasets():
   'Characterizes a dataset for PyTorch'
@@ -73,7 +69,7 @@ class Datasets():
             self.processed_Xs.append(x)
             self.processed_adjs.append(a)
             self.num_of_edges.append(n)
-        
+
         # Check if processed_Xs is not empty before accessing it
         if len(self.processed_Xs) > 0:
             self.feature_size = self.processed_Xs[0].shape[-1]
@@ -89,8 +85,11 @@ class Datasets():
 
   def remove_largergraphs(self, adjs, labels, Xs, max_size):
       processed_adjs = []
-      processed_labels = None if labels is None else []
-      processed_Xs = None if Xs is None else []
+      # Preserve the absence of optional labels/features. Returning [] for a
+      # missing label list makes shuffle() treat the dataset as labelled and
+      # then index an empty list with every graph index.
+      processed_labels = [] if labels is not None else None
+      processed_Xs = [] if Xs is not None else None
 
       for i in range(len(adjs)):
           if adjs[i].shape[0]<=max_size:
@@ -100,7 +99,7 @@ class Datasets():
               if Xs is not None:
                   processed_Xs.append(Xs[i])
       return processed_adjs,processed_labels,processed_Xs
-      
+
   def get(self):
       indexces = list(range(self.__len__()))
       return [self.processed_adjs[i] for i in indexces], [self.processed_Xs[i] for i in indexces]
@@ -341,12 +340,15 @@ class Datasets():
   #           return list_adj , X
 
   def shuffle(self):
-
-
       indx = list(range(len(self.list_adjs)))
       np.random.shuffle(indx)
 
       if self.list_Xs is not None:
+        if len(self.list_Xs) != len(self.list_adjs):
+          raise ValueError(
+              "Node features and adjacency lists must have the same length: "
+              f"features={len(self.list_Xs)}, graphs={len(self.list_adjs)}"
+          )
         self.list_Xs=[self.list_Xs[i] for i in indx]
       else:
           warnings.warn("X is empty")
@@ -354,13 +356,18 @@ class Datasets():
       self.list_adjs=[self.list_adjs[i] for i in indx]
 
       # if the graphs have extracted features
-      if self.featureList is not None:
+      if self.featureList !=None:
           for el_i , element in enumerate(self.featureList):
               self.featureList[el_i] = element[indx]
       else:
           warnings.warn("Graph structureal feature is an empty Set")
 
       if self.labels is not None:
+          if len(self.labels) != len(self.list_adjs):
+              raise ValueError(
+                  "Labels and adjacency lists must have the same length: "
+                  f"labels={len(self.labels)}, graphs={len(self.list_adjs)}"
+              )
           self.labels= [self.labels[i] for i in indx]
       else:
            warnings.warn("Label is an empty Set")
@@ -378,6 +385,63 @@ class Datasets():
         # return self.processed_adjs[index], self.processed_Xs[index],torch.tensor(self.list_adjs[index].todense(), dtype=torch.float32)
         return self.processed_adjs[index], self.processed_Xs[index]
 
+
+def structural_BFS(list_adj):
+    """Order nodes by structural descriptors followed by stable BFS traversal.
+    
+    Roots and neighbors are ranked by degree, core number, and closeness.
+    Integer node identifiers provide the final deterministic tie-break.
+    This ordering is enabled by the Planar and Tree dataset configurations."""
+    for graph_index, adjacency in enumerate(list_adj):
+        adjacency = _ensure_csr_adj(adjacency)
+        node_count = adjacency.shape[0]
+        if node_count <= 1:
+            list_adj[graph_index] = adjacency
+            continue
+
+        if hasattr(nx, "from_scipy_sparse_array"):
+            graph = nx.from_scipy_sparse_array(adjacency, create_using=nx.Graph)
+        else:
+            graph = nx.from_scipy_sparse_matrix(adjacency, create_using=nx.Graph)
+        graph.remove_edges_from(nx.selfloop_edges(graph))
+        degrees = dict(graph.degree())
+        try:
+            cores = nx.core_number(graph) if graph.number_of_edges() else {
+                node: 0 for node in graph.nodes()
+            }
+        except nx.NetworkXError:
+            cores = {node: 0 for node in graph.nodes()}
+        closeness = nx.closeness_centrality(graph)
+
+        def structural_key(node):
+            return (
+                int(degrees.get(node, 0)),
+                int(cores.get(node, 0)),
+                float(closeness.get(node, 0.0)),
+                -int(node),
+            )
+
+        unseen = set(graph.nodes())
+        order = []
+        while unseen:
+            root = max(unseen, key=structural_key)
+            queue = [root]
+            unseen.remove(root)
+            cursor = 0
+            while cursor < len(queue):
+                node = queue[cursor]
+                cursor += 1
+                order.append(node)
+                neighbours = [nbr for nbr in graph.neighbors(node) if nbr in unseen]
+                neighbours.sort(key=structural_key, reverse=True)
+                for neighbour in neighbours:
+                    if neighbour in unseen:
+                        unseen.remove(neighbour)
+                        queue.append(neighbour)
+
+        list_adj[graph_index] = _ensure_csr_adj(adjacency[order, :][:, order])
+    return list_adj
+
 def list_graph_loader(graph_type, _max_list_size=None, return_labels=False,
                       limited_to=None, shuffle=True, shuffle_seed=None):
   list_adj = []
@@ -388,62 +452,13 @@ def list_graph_loader(graph_type, _max_list_size=None, return_labels=False,
       for split in ("train", "val", "test"):
           list_adj.extend(benchmark_splits[split])
       list_x = [None for _ in list_adj]
-      indices = list(range(len(list_adj)))
-      if shuffle:
-          subset_rng = random if shuffle_seed is None else random.Random(shuffle_seed)
-          subset_rng.shuffle(indices)
-      if limited_to is not None:
-          indices = indices[:limited_to]
-      list_adj = [_ensure_csr_adj(list_adj[index]) for index in indices]
-      list_x = [list_x[index] for index in indices]
-      return list_adj, list_x, None if return_labels else []
-  if graph_type=="IMDBBINARY":
-      data = dgl.data.GINDataset(name='IMDBBINARY', self_loop=False, raw_dir=str(DATA_ROOT / 'dgl'))
-      graphs, labels = data.graphs, data.labels
-      for i, graph in enumerate(graphs):
-          list_adj.append(csr_matrix(graph.adjacency_matrix().to_dense().numpy()))
-          # list_x.append(graph.ndata['feat'])
-          list_x.append(None)
-          list_labels.append(labels[i].cpu().item())
-      if not os.path.exists(str(DATA_ROOT / 'IMDBBINARY_lattice_graph.npy')):
-          graphs_to_writeOnDisk = [gr.toarray() for gr in list_adj]
-          np.save(
-              str(DATA_ROOT / 'IMDBBINARY_lattice_graph.npy'),
-              np.array(graphs_to_writeOnDisk, dtype=object),
-              allow_pickle=True
-          )
-  elif graph_type=="MUTAG":
-      data = dgl.data.GINDataset(name='MUTAG', self_loop=False, raw_dir=str(DATA_ROOT / 'dgl'))
-      graphs, labels = data.graphs, data.labels
-      for i, graph in enumerate(graphs):
-          list_adj.append(csr_matrix(graph.adjacency_matrix().to_dense().numpy()))
-          # list_x.append(graph.ndata['feat'])
-          list_x.append(None)
-          list_labels.append(labels[i].cpu().item())
-      if not os.path.exists(str(DATA_ROOT / 'MUTAG_lattice_graph.npy')):
-          graphs_to_writeOnDisk = [gr.toarray() for gr in list_adj]
-          np.save(
-              str(DATA_ROOT / 'MUTAG_lattice_graph.npy'),
-              np.array(graphs_to_writeOnDisk, dtype=object),
-              allow_pickle=True
-          )
-  elif graph_type=="community":
-      graph_list = pkl.load(open(str(DATA_ROOT / "SynCommunity1000_origin.pkl"),'rb'))
-      for graph in graph_list:
-          list_x.append(None)
-          list_adj.append(nx.adjacency_matrix(graph))
-  elif graph_type=="SynCommunity1000_origin":
-      graph_list = pkl.load(open(str(DATA_ROOT / "SynCommunity1000_origin.pkl"),'rb'))
-      for graph in graph_list:
-          list_x.append(None)
-          list_adj.append(nx.adjacency_matrix(graph))
-  elif graph_type =='ego' or graph_type == "SynEgo1000_origin" or graph_type == "SynEgo1000_original":
-      graph_list = pkl.load(open(str(DATA_ROOT / "SynEgo1000_origin.pkl"),'rb'))
-      for graph in graph_list:
-          list_x.append(None)
-          list_adj.append(nx.adjacency_matrix(graph))
+  elif graph_type=="grid":
+      for i in range(10, 20):
+        for j in range(10, 20):
+            list_adj.append(nx.adjacency_matrix(grid(i, j)))
+            list_x.append(None)
   else:
-      raise ValueError("Unsupported dataset for fixed: " + str(graph_type))
+      raise ValueError("Unsupported dataset for structural: " + str(graph_type))
 
   def return_subset(A,X,Y, limited_to):
       indx = list(range(len(A)))
@@ -466,4 +481,4 @@ def list_graph_loader(graph_type, _max_list_size=None, return_labels=False,
           list_labels = None
   return return_subset(list_adj, list_x, list_labels, limited_to)
 
-__all__ = ['Datasets', 'BFS', 'data_split', 'list_graph_loader']
+__all__ = ['Datasets', 'BFS', 'data_split', 'list_graph_loader', 'structural_BFS']

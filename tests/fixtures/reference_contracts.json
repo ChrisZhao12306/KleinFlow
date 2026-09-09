@@ -1,6 +1,6 @@
 {
   "default_parameters": {
-    "fixed": {
+    "standard": {
       "lr": 0.0001,
       "dropout": 0.2,
       "seed": 1432,
@@ -33,7 +33,7 @@
       "decoder_node_dim": 128,
       "encoder_blocks": 4
     },
-    "v0901": {
+    "structural": {
       "lr": 0.0001,
       "dropout": 0.2,
       "seed": 1432,
@@ -97,7 +97,7 @@
       "DATASET": "grid",
       "DEVICE": "cuda:1",
       "NUM_EXPERIMENTS": 60,
-      "RESULTS_FILE": "Grid_Second.txt",
+      "RESULTS_FILE": "grid_search.txt",
       "FIXED_HYPERPARAMS": {
         "encoder_blocks": 5,
         "graphEmDim": 64,
@@ -207,7 +207,7 @@
       "DATASET": "SynEgo1000_original",
       "DEVICE": "cuda:5",
       "NUM_EXPERIMENTS": 60,
-      "RESULTS_FILE": "SynEgo1000_original_Second.txt",
+      "RESULTS_FILE": "ego_search.txt",
       "FIXED_HYPERPARAMS": {
         "epoch_number": 2000,
         "epoch_diff": 2000,
@@ -282,7 +282,7 @@
       "DATASET": "SynCommunity1000_origin",
       "DEVICE": "cuda:1",
       "NUM_EXPERIMENTS": 60,
-      "RESULTS_FILE": "SynCommunity1000_Sixth.txt",
+      "RESULTS_FILE": "community_search.txt",
       "FIXED_HYPERPARAMS": {
         "epoch_number": 2000,
         "epoch_diff": 2000,
@@ -366,7 +366,7 @@
       "DATASET": "IMDBBINARY",
       "DEVICE": "cuda:1",
       "NUM_EXPERIMENTS": 60,
-      "RESULTS_FILE": "IMDBBINARY_Second.txt",
+      "RESULTS_FILE": "imdbbinary_search.txt",
       "FIXED_HYPERPARAMS": {
         "epoch_number": 2000,
         "epoch_diff": 2000,
@@ -448,7 +448,7 @@
       "DATASET": "MUTAG",
       "DEVICE": "cuda:2",
       "NUM_EXPERIMENTS": 60,
-      "RESULTS_FILE": "MUTAG_Third.txt",
+      "RESULTS_FILE": "mutag_search.txt",
       "FIXED_HYPERPARAMS": {
         "epoch_number": 2000,
         "epoch_diff": 2000,
@@ -542,8 +542,5 @@
     "imdbbinary": "8ca3801a6a52683a50b85e321cfbdfbf86d8bf1685ceb4f0f82467deb3ca13dd",
     "mutag": "a078fd81a6def27b2ee8af6fac36e930af440a1bb35ecdb62387052803a387f5"
   },
-  "baseline_sha256": {
-    "hyperparam_search_baselines.json": "8a7d775d38ab95d6f8430a9c535391ae7742edbe38ad2a25343eae1de85a8c74",
-    "hyperparam_search_baselines_fourth.json": "b830c32aa1bb446e64992ac0f3220d9d861f8d9886de860af2806d79bce24c36"
-  }
+  "search_anchors_sha256": "0616c824b1227883b55acb965237830e3e1a15c5ab1162f7fc831b9949c1563e"
 }

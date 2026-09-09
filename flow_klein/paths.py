@@ -8,7 +8,6 @@ from flow_klein.registry import dataset_spec
 ROOT = Path(__file__).resolve().parents[1]
 DATA_ROOT = Path(os.environ.get('FLOW_KLEIN_DATA_DIR', str(ROOT / 'data'))).resolve()
 OUTPUT_ROOT = Path(os.environ.get('FLOW_KLEIN_OUTPUT_DIR', str(ROOT / 'outputs'))).resolve()
-CONFIG_ROOT = ROOT / 'configs'
 ORCA_ROOT = ROOT / 'third_party' / 'orca'
 
 

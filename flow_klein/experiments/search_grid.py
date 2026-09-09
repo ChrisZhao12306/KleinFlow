@@ -1,4 +1,4 @@
-"""Original v0901 hyperparameter search for grid."""
+"""Random hyperparameter search for grid graph generation."""
 
 import random
 import time
@@ -16,9 +16,9 @@ DATASET = "grid"
 DEVICE = "cuda:1"
 TASK = "klein_graphtask"
 NUM_EXPERIMENTS = 60
-RESULTS_FILE = "Grid_Second.txt"
+RESULTS_FILE = "grid_search.txt"
 
-# Plan.md Step 11: pull dataset recipe defaults and merge with script overrides.
+# Dataset-specific search ranges and constant training settings.
 from flow_klein.config.recipes import DATASET_DEFAULTS as _DD
 _RECIPE = dict(_DD.get(DATASET, {}))
 
@@ -33,15 +33,7 @@ FIXED_HYPERPARAMS = {
     'flow_guidance_scale': 1.15,
 }
 
-# Search space centered on the new Grid recipe (DATASET_DEFAULTS['Grid']):
-#   encoder_blocks=5, graphEmDim=64, decoder_node_dim=192, dit_hidden_dim=384,
-#   dit_num_layers=6, lap_pe_dim=16, flow_steps=200, degree_reg_weight=0.20,
-#   degree_aux_weight=0.10.
-# Rationale:
-# - Grid = 100 synthetic graphs, ALL of degree 4 (regular). Degree-MMD is the
-#   hardest constraint to satisfy: heavy degree_reg_weight + degree_aux_weight.
-# - Top-E decode + bridge repair is the main lever (handled in Plan.md, not here).
-# - GIN encoder with deeper blocks helps capture the grid structure.
+# Dataset-specific search ranges and constant training settings.
 HYPERPARAM_GRID = {
     # Structural encoder / positional encoding (Laplacian PE is critical for Grid)
     'lap_pe_dim': [12, 16, 20],
@@ -64,7 +56,7 @@ HYPERPARAM_GRID = {
     'dit_num_heads': [4, 8],
     'dit_num_layers': [5, 6, 7],
 
-    # Plan.md degree-aware aux losses (Grid = regular degree-4: push hard)
+    # Degree supervision for grid structure, including boundary nodes.
     'degree_reg_weight': [0.15, 0.20, 0.30],
     'degree_aux_weight': [0.05, 0.10, 0.15],
 }
@@ -115,8 +107,8 @@ def generate_random_configs(num_configs: int, seed: int = 42) -> list:
 
 def run_experiment(config: dict, exp_id: int) -> dict:
     """Run a single experiment with given hyperparameters."""
-    from flow_klein.config.v0901 import parser
-    from flow_klein.training.v0901 import klein_graphtask
+    from flow_klein.config.structural import parser
+    from flow_klein.training.structural import klein_graphtask
     
     # Create argument list
     args_list = [

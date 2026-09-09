@@ -1,149 +1,142 @@
 # KleinFlow
 
-Graph generation with Flow Matching on the Klein model of hyperbolic geometry. The code is organized by function and preserves the two dataset-specific implementations from the original project.
+**Graph generation with conditional Flow Matching in Klein hyperbolic space.**
 
-## Datasets and implementation routes
+KleinFlow learns graph representations in the Klein ball and models their distribution with a conditional Transformer velocity field. Dataset-specific preprocessing, structural conditioning, decoding constraints, and evaluation protocols are selected through a single training interface.
 
-| Dataset | Implementation | Evaluation |
-|---|---|---|
-| Planar, Tree | `v0901` | V.U.N., five structural metrics, and ratios |
-| Grid | `v0901` | Degree / Clustering / Spectral MMD |
-| Ego, Community, IMDBBINARY, MUTAG | `fixed` | Degree / Clustering / Spectral MMD |
-| Ego-small, Community-small | `fixed` | Degree / Clustering / Orbit MMD |
+## Method
 
-The `v0901` implementation comes from the on-disk Flow_Klein_0901 project, and `fixed` comes from Flow_Klein_fixed. The training entry point selects the implementation by dataset. Configuration, preprocessing, encoders/decoders, training, sampling, and evaluation follow that route. Klein geometry, Conditional DiT, and Flow Matching share the same implementation.
+The generation pipeline has three stages:
 
-Original experimental behavior is preserved, including Grid's separate validation set, the validation slices for standard fixed datasets, the fixed Planar/Tree benchmark splits and structural constraints, and Community-small's original split over an index space of 200. The Community-small source contains 100 graphs; the loader does not replace its special split with a new 128/32/40 split.
+1. **Graph representation learning.** A graph encoder produces a Klein latent representation and a conditioning vector. A masked decoder learns node occupancy, adjacency, and auxiliary graph statistics.
+2. **Conditional Flow Matching.** A conditional DiT predicts velocities in standardized tangent coordinates. Latent normalization statistics are estimated from training embeddings.
+3. **Graph generation.** Euler or Heun integration produces latent samples, which are mapped to the Klein ball and decoded into graphs. Dataset configurations control edge budgets, connectivity repair, structural constraints, and candidate selection.
 
-Aliases are case-insensitive and accept `-` or `_` in small dataset names. `SynEgo1000_origin` and `SynEgo1000_original` map to Ego; `SynCommunity1000_origin` maps to Community; `comm20` maps to Community-small. Unsupported datasets are rejected.
+The geometry and Flow Matching implementation are shared across datasets. Architecture settings, data protocols, and decoding options are defined in the Python package.
 
-## Environment
+## Installation
 
-Training targets Linux with CUDA. The repository contains a single `environment.yml`, copied from the original HypDiff_gt environment. Its name is now `Klein_FM`, the machine-specific `prefix` is removed, and all channels, dependencies, and versions are unchanged.
+The training environment targets **Linux with CUDA**. Conda, `g++` for ORCA, and `curl` for benchmark downloads are required.
 
 ```bash
-git clone https://github.com/ChrisZhao12306/KleinFlow.git
-cd KleinFlow
+git clone https://github.com/ChrisZhao12306/KleinFlow.git /data1/ziyan/Flow_Klein
+cd /data1/ziyan/Flow_Klein
+
 conda env create -f environment.yml
 conda activate Klein_FM
-export PYTHON="$(command -v python)"
 python scripts/build_orca.py
 ```
 
-ORCA compilation requires `g++`. The Planar/Tree downloaders require `curl`. Use the original installation sources for the pinned Torch and DGL CUDA wheels. If environment creation cannot locate the pinned DGL CUDA wheel on the default index, use the original server's wheel source without changing the dependency versions.
+The environment file pins the Python, Torch, DGL, and scientific computing dependencies. CUDA-enabled packages require a compatible CUDA runtime. Run commands from the source checkout; no editable installation is required.
 
-Run directly from the source checkout; an editable installation is not required. The environment name change applies to this repository's environment file and does not rename an existing Conda environment.
+## Datasets
 
-## Data
+| Dataset | Data preparation | Evaluation |
+|---|---|---|
+| Planar | Download benchmark graphs | V.U.N. and structural MMD ratios |
+| Tree | Download benchmark graphs | V.U.N. and structural MMD ratios |
+| Grid | Generate 100 grid graphs | Degree, clustering, spectral MMD |
+| Ego | Provide the dataset file | Degree, clustering, spectral MMD |
+| Community | Provide the dataset file | Degree, clustering, spectral MMD |
+| Ego-small | Download benchmark graphs | Degree, clustering, orbit MMD |
+| Community-small | Download benchmark graphs | Degree, clustering, orbit MMD |
+| IMDBBINARY | Download through DGL | Degree, clustering, spectral MMD |
+| MUTAG | Download through DGL | Degree, clustering, spectral MMD |
 
-The consolidated local project contains these copied source files:
+Dataset names are case-insensitive. Both hyphens and underscores are accepted for `ego-small` and `community-small`.
 
-- `data/benchmarks/planar/planar.pkl` and `data/benchmarks/tree/tree.pkl`
-- `data/SynEgo1000_origin.pkl` and `data/SynCommunity1000_origin.pkl`
-- `data/benchmarks/ego_small/ego_small.pkl`
-- `data/benchmarks/community_small/community_12_21_100.pt`
-
-Grid generates 100 grid graphs using the original method. IMDBBINARY and MUTAG retain the DGL GINDataset loader, with download caches under `data/dgl/`. Planar, Tree, and the two small benchmarks can be downloaded from their original sources.
+Prepare selected datasets:
 
 ```bash
-python scripts/prepare_data.py --dry-run
-python scripts/prepare_data.py
-# Prepare selected datasets only.
-python scripts/prepare_data.py planar tree ego-small community-small
+python scripts/prepare_data.py planar tree grid ego-small community-small imdbbinary mutag
 ```
 
-Data files are excluded from Git. After cloning, copy the two `Syn*.pkl` files into `data/` separately. Prepare the remaining datasets with the commands above or copy them from an existing local dataset directory. The default data directory is resolved relative to the repository; set `FLOW_KLEIN_DATA_DIR` before startup to use another directory.
+For Ego and Community, place `SynEgo1000_origin.pkl` and `SynCommunity1000_origin.pkl` in `data/`. Once these files are available, `python scripts/prepare_data.py` prepares all nine datasets. Use `--dry-run` to inspect the requested datasets without downloading or loading them.
+
+Raw benchmarks are stored in `data/benchmarks/`, and DGL caches are stored in `data/dgl/`. Data files are excluded from Git. Set `FLOW_KLEIN_DATA_DIR` before startup to use another data directory.
+
+**Data protocols.** Planar and Tree use predefined splits of 128 training, 32 validation, and 40 test graphs. Ego-small uses a seeded split of the same sizes. Community-small applies a seed-0 permutation over an index space of 200 to its 100 available graphs; membership and ordering are defined by the benchmark loader. Grid reserves a separate validation subset. Dataset loaders determine node ordering, structural features, and padding before training.
 
 ## Training
 
 ```bash
 python scripts/train.py --dataset planar --device cuda:0
-python scripts/train.py --dataset tree --device cuda:0
-python scripts/train.py --dataset grid --device cuda:0
-python scripts/train.py --dataset ego --device cuda:0
 python scripts/train.py --dataset ego-small --device cuda:0
-python scripts/train.py --dataset community --device cuda:0
-python scripts/train.py --dataset community-small --device cuda:0
-python scripts/train.py --dataset IMDBBINARY --device cuda:0
 python scripts/train.py --dataset MUTAG --device cuda:0
 ```
 
-Original effective Klein arguments and defaults are preserved, and explicit arguments take precedence. `--taskselect klein_graphtask` remains supported. Standard training defaults differ from the fixed parameters used by dataset-specific searches; reproduce an experiment with the complete command printed in the search results.
+A training run fits the graph autoencoder and the Flow Matching model, then samples graphs and computes the dataset's evaluation metrics. Explicit command-line arguments take precedence over dataset defaults.
 
 ```bash
 python scripts/train.py --dataset planar --help
 python scripts/train.py --dataset planar --dry-run
-python scripts/train.py --dataset MUTAG --epoch_number 2000 --epoch_diff 2000 \
-  --device cuda:0 --directed False --graph_save_path /path/to/my_run
+
+python scripts/train.py --dataset MUTAG --device cuda:0 \
+  --epoch_number 2000 --epoch_diff 2000 \
+  --directed False --graph_save_path outputs/mutag_run
 ```
 
-`--dry-run` prints the selected route and effective arguments without starting training or writing experiment files. The historical `--use_simple_dit` argument remains accepted for compatibility; both original pipelines actually use Conditional DiT.
-
-Default outputs are written to `outputs/<dataset>/<timestamp_and_process_id>/`, including models, generated graphs, text evaluation results, and `metrics.json`. The JSON file records the implementation route, effective arguments, and original metric fields. Use `--graph_save_path` to select an output directory, or set `FLOW_KLEIN_OUTPUT_DIR` before startup to change the default output root.
-
-Python and Shell entry points locate project files relative to their own locations and support invocation from another working directory. Explicit relative output paths are resolved from the caller's working directory.
+Key arguments include `--graphEmDim` for latent width, `--cond_dim` for conditioning width, `--epoch_number` and `--epoch_diff` for the two training stages, and `--flow_steps` and `--flow_integrator` for sampling. Inspect `--help` for the selected dataset before changing structural decoding options.
 
 ## Hyperparameter search
 
-The unified entry point preserves each source's sampling algorithm, search space, fixed parameters, default GPUs, and ranking rules:
-
 ```bash
 python scripts/hyperparam_search.py --dataset planar --dry-run
-python scripts/hyperparam_search.py --dataset grid --dry-run
+python scripts/hyperparam_search.py --dataset planar --devices cuda:0 cuda:1
 python scripts/hyperparam_search.py --dataset ego-small --device cuda:0
 python scripts/hyperparam_search.py --dataset MUTAG --device cuda:0 --num-experiments 60
 ```
 
-| Dataset | Original default GPUs | Default experiments | Search stage |
-|---|---|---:|---|
-| Planar | cuda:4, 5, 6, 7 | 120 | Fourth |
-| Tree | cuda:1, 2, 3 | 120 | Fourth |
-| Grid | cuda:1 | 60 | Second |
-| Ego | cuda:5 | 60 | Second |
-| Community | cuda:1 | 60 | Sixth |
-| Ego-small, Community-small | cuda:0 | 60 | Third |
-| IMDBBINARY | cuda:1 | 60 | Second |
-| MUTAG | cuda:2 | 60 | Third |
+Planar and Tree use 120 trials by default: three anchor configurations, 93 local variants, and 24 global samples. Their scheduler isolates each worker to a selected GPU. Other datasets use 60 sequential random-search trials. Search spaces, anchor configurations, and constant training parameters are packaged in `flow_klein/experiments/`.
 
-Background launch examples:
+Specify `--device` or `--devices` for the GPUs available on your machine. Search defaults use seed 42 for configuration sampling and seed 1432 for training. Use `--search-seed` and `--training-seed` to override them.
+
+Background execution:
 
 ```bash
+export PYTHON="$(command -v python)"
 bash scripts/planar_hypsearch.sh --devices cuda:0 cuda:1
-bash scripts/tree_hypsearch.sh --device cuda:0
-bash scripts/ego_small_hypsearch.sh --device cuda:0
-bash scripts/Grid_hypsearch.sh --device cuda:0
-# The unified launcher accepts canonical lowercase dataset names.
 bash scripts/launch_search.sh community --device cuda:0
 ```
 
-Planar/Tree retain GPU isolation, parallel scheduling, and failure records. Other searches retain sequential execution. Background launchers print the log and PID locations; search results and models are stored under `outputs/search/`. Use each entry point's `--help` for source-specific options.
+Search results include the effective parameters, ranking metrics, and complete reproduction commands. Standard training defaults and search settings serve different purposes; use the command recorded for a trial to reproduce that trial.
 
-## Project layout
+## Evaluation and outputs
 
-Executable entry points are in `scripts/`, and implementation code is in `flow_klein/`. Implementation modules are grouped under `config`, `data`, `geometry`, `models`, `training`, `evaluation`, `experiments`, and `utils`. Differences between the two routes live in `fixed.py` and `v0901.py`. Frozen search baselines are in `configs/`, orbit-counting source code is in `third_party/orca/`, and regression tests are in `tests/`.
+For Planar and Tree, V.U.N. measures validity, uniqueness, and novelty relative to the training graphs. Structural comparisons include degree, clustering, orbit, spectral, and wavelet statistics, together with reference-normalized MMD ratios. Results are ranked by V.U.N. and then average ratio. Other datasets are ranked by their corresponding average MMD; lower MMD is better.
 
-This repository targets retraining. It does not provide legacy import-path mappings for checkpoints serialized as complete Python objects.
+Training outputs are saved under `outputs/<dataset>/<run_id>/`. Each run includes model files, generated graphs, text metrics, and `metrics.json` with effective parameters, split metadata, seeds, and software versions. Search outputs are stored under `outputs/search/`.
 
-## Validation
+Use `--graph_save_path` for an explicit training destination, or set `FLOW_KLEIN_OUTPUT_DIR` to change the default output root. Entry points support invocation from other working directories; explicit relative paths resolve from the caller's directory. Outputs and caches are excluded from Git.
+
+## Tests
 
 ```bash
 python -m pytest -q
 python scripts/smoke_test.py --dry-run
-# Run shortened training for all nine datasets on Linux/CUDA after preparing data and ORCA.
+# After preparing data and compiling ORCA, run short training on all datasets.
 python scripts/smoke_test.py --device cuda:0
 ```
 
-The smoke test reduces epochs and model widths for validation without changing production defaults. It writes per-dataset logs and status under `outputs/smoke/`.
+Tests cover dataset configuration, preprocessing, structural decoding, metrics, search sampling, and process scheduling. Dependency-specific tests are skipped when their requirements are unavailable. Optional numerical comparisons use reference traces supplied through `FLOW_KLEIN_REFERENCE_DIR`; floating-point tolerances are `rtol=1e-5` and `atol=1e-6`. Reference traces and pretrained weights are not distributed with this repository.
 
-Optional numerical comparisons against the original implementations run only when the original repository paths are explicitly provided. Ordinary training and tests do not depend on the original repositories:
+The smoke test reduces epochs and model widths to exercise training, saving, sampling, and evaluation. Its outputs are written to `outputs/smoke/`.
 
-```bash
-export FLOW_KLEIN_SOURCE_FIXED=/path/to/Flow_Klein_fixed
-export FLOW_KLEIN_SOURCE_V0901=/path/to/Flow_Klein_0901
-export FLOW_KLEIN_TEST_DEVICE=cpu  # Alternatively, use cuda:0.
-python -m pytest -q tests/test_numerical_equivalence.py
+## Code organization
+
+```text
+scripts/                  Training, data preparation, search, and build entry points
+flow_klein/
+  config/                 Argument definitions and dataset defaults
+  data/                   Graph loading, preprocessing, and structural profiles
+  geometry/               Klein geometry and mathematical operations
+  models/                 Encoders, decoders, conditional DiT, and Flow Matching
+  training/               Optimization, sampling, and graph decoding
+  evaluation/             Graph-distribution and structural metrics
+  experiments/            Search spaces, anchors, and process scheduling
+  utils/                  Shared utility namespace
+third_party/orca/         Orbit-counting source code
+tests/                    Unit and integration tests
 ```
 
-Comparisons use isolated processes and identical synthetic inputs to check splits, ordering, features, parameter initialization, forward outputs, losses, gradients, updated parameters, Euler/Heun sampling, decoding, and metrics. Discrete outputs must match exactly; floating-point tolerances are `rtol=1e-5, atol=1e-6`. The smoke test separately covers end-to-end execution with real datasets.
-
-See [VALIDATION.md](VALIDATION.md) for the checks actually performed and outstanding Linux/CUDA validation.
+Benchmark download locations and data-source attribution are recorded in the dataset loaders. Orbit statistics use the bundled ORCA implementation.
