@@ -19,8 +19,6 @@ The geometry and Flow Matching implementation are shared across datasets. Archit
 The training environment targets **Linux with CUDA**. Conda, `g++` for ORCA, and `curl` for benchmark downloads are required.
 
 ```bash
-git clone https://github.com/ChrisZhao12306/KleinFlow.git
-
 conda env create -f environment.yml
 conda activate Klein_FM
 python scripts/build_orca.py
