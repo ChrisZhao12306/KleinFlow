@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -eu
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "${PYTHON:-python}" -u "$script_dir/planar_hypsearch.py" --background "$@"
