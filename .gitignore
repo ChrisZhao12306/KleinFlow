@@ -3,7 +3,8 @@ __pycache__/
 .pytest_cache/
 .venv/
 .ruff_cache/
-/data/
+/data/dgl/
+/data/**/*.tmp.*
 /outputs/
 third_party/orca/orca
 third_party/orca/orca.exe

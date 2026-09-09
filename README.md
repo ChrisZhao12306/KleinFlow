@@ -30,27 +30,33 @@ The environment file pins the Python, Torch, DGL, and scientific computing depen
 
 | Dataset | Data preparation | Evaluation |
 |---|---|---|
-| Planar | Download benchmark graphs | V.U.N. and structural MMD ratios |
-| Tree | Download benchmark graphs | V.U.N. and structural MMD ratios |
+| Planar | Included in `data/benchmarks/planar/` | V.U.N. and structural MMD ratios |
+| Tree | Included in `data/benchmarks/tree/` | V.U.N. and structural MMD ratios |
 | Grid | Generate 100 grid graphs | Degree, clustering, spectral MMD |
-| Ego | Provide the dataset file | Degree, clustering, spectral MMD |
-| Community | Provide the dataset file | Degree, clustering, spectral MMD |
-| Ego-small | Download benchmark graphs | Degree, clustering, orbit MMD |
-| Community-small | Download benchmark graphs | Degree, clustering, orbit MMD |
+| Ego | Included in `data/` | Degree, clustering, spectral MMD |
+| Community | Included in `data/` | Degree, clustering, spectral MMD |
+| Ego-small | Included in `data/benchmarks/ego_small/` | Degree, clustering, orbit MMD |
+| Community-small | Included in `data/benchmarks/community_small/` | Degree, clustering, orbit MMD |
 | IMDBBINARY | Download through DGL | Degree, clustering, spectral MMD |
 | MUTAG | Download through DGL | Degree, clustering, spectral MMD |
 
 Dataset names are case-insensitive. Both hyphens and underscores are accepted for `ego-small` and `community-small`.
 
-Prepare selected datasets:
+The repository includes the six raw dataset files listed above. Prepare all datasets, including DGL downloads for IMDBBINARY and MUTAG:
+
+```bash
+python scripts/prepare_data.py
+```
+
+To prepare selected datasets only:
 
 ```bash
 python scripts/prepare_data.py planar tree grid ego-small community-small imdbbinary mutag
 ```
 
-For Ego and Community, place `SynEgo1000_origin.pkl` and `SynCommunity1000_origin.pkl` in `data/`. Once these files are available, `python scripts/prepare_data.py` prepares all nine datasets. Use `--dry-run` to inspect the requested datasets without downloading or loading them.
+Ego and Community are stored as `data/SynEgo1000_origin.pkl` and `data/SynCommunity1000_origin.pkl`. Missing Planar, Tree, Ego-small, and Community-small files can be downloaded by the preparation script. Use `--dry-run` to inspect the requested datasets without downloading or loading them.
 
-Raw benchmarks are stored in `data/benchmarks/`, and DGL caches are stored in `data/dgl/`. Data files are excluded from Git. Set `FLOW_KLEIN_DATA_DIR` before startup to use another data directory.
+Raw benchmarks are stored in `data/benchmarks/`, and DGL caches are stored in `data/dgl/`. Raw dataset files are tracked in Git; generated DGL caches and temporary downloads are excluded. Set `FLOW_KLEIN_DATA_DIR` before startup to use another data directory.
 
 **Data protocols.** Planar and Tree use predefined splits of 128 training, 32 validation, and 40 test graphs. Ego-small uses a seeded split of the same sizes. Community-small applies a seed-0 permutation over an index space of 200 to its 100 available graphs; membership and ordering are defined by the benchmark loader. Grid reserves a separate validation subset. Dataset loaders determine node ordering, structural features, and padding before training.
 
@@ -123,6 +129,7 @@ The smoke test reduces epochs and model widths to exercise training, saving, sam
 
 ```text
 scripts/                  Training, data preparation, search, and build entry points
+data/                     Raw graph datasets
 flow_klein/
   config/                 Argument definitions and dataset defaults
   data/                   Graph loading, preprocessing, and structural profiles

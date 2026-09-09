@@ -5,3 +5,5 @@
 *.md text eol=lf
 *.cpp text eol=lf
 *.h text eol=lf
+*.pkl binary
+*.pt binary
