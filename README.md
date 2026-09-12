@@ -112,19 +112,6 @@ Training outputs are saved under `outputs/<dataset>/<run_id>/`. Each run include
 
 Use `--graph_save_path` for an explicit training destination, or set `FLOW_KLEIN_OUTPUT_DIR` to change the default output root. Entry points support invocation from other working directories; explicit relative paths resolve from the caller's directory. Outputs and caches are excluded from Git.
 
-## Tests
-
-```bash
-python -m pytest -q
-python scripts/smoke_test.py --dry-run
-# After preparing data and compiling ORCA, run short training on all datasets.
-python scripts/smoke_test.py --device cuda:0
-```
-
-Tests cover dataset configuration, preprocessing, structural decoding, metrics, search sampling, and process scheduling. Dependency-specific tests are skipped when their requirements are unavailable. Optional numerical comparisons use reference traces supplied through `FLOW_KLEIN_REFERENCE_DIR`; floating-point tolerances are `rtol=1e-5` and `atol=1e-6`. Reference traces and pretrained weights are not distributed with this repository.
-
-The smoke test reduces epochs and model widths to exercise training, saving, sampling, and evaluation. Its outputs are written to `outputs/smoke/`.
-
 ## Code organization
 
 ```text
@@ -140,7 +127,6 @@ flow_klein/
   experiments/            Search spaces, anchors, and process scheduling
   utils/                  Shared utility namespace
 third_party/orca/         Orbit-counting source code
-tests/                    Unit and integration tests
 ```
 
 Benchmark download locations and data-source attribution are recorded in the dataset loaders. Orbit statistics use the bundled ORCA implementation.
