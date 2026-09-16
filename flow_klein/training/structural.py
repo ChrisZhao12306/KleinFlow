@@ -2115,7 +2115,11 @@ def sample_and_decode(
         integrator = getattr(args, 'flow_integrator', 'euler')
         guidance_scale = getattr(args, 'flow_guidance_scale', 1.2)
         if integrator == 'heun':
-            samples_klein = flow_model.sample_heun(sampled_cond, guidance_scale=guidance_scale)
+            samples_klein = flow_model.sample_heun(
+                sampled_cond,
+                guidance_scale=guidance_scale,
+                ptransp_mode=getattr(args, 'flow_ptransp', 'legacy'),
+            )
         else:
             samples_klein = flow_model.sample(sampled_cond, guidance_scale=guidance_scale)
 

@@ -43,3 +43,12 @@ python scripts/train.py --dataset IMDBBINARY --device cuda:0
 # MUTAG
 python scripts/train.py --dataset MUTAG --device cuda:0
 ```
+
+Heun sampling uses the legacy parallel-transport implementation by default so
+existing experiment commands remain reproducible. Select analytic parallel
+transport along the connecting geodesic with:
+
+```bash
+python scripts/train.py --dataset MUTAG --device cuda:0 \
+  --flow_integrator heun --flow_ptransp lorentz
+```

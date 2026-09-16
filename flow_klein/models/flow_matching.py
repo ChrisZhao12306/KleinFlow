@@ -178,8 +178,19 @@ class KleinFlowMatching(nn.Module):
         self,
         cond_code: torch.Tensor,
         steps: int = None,
-        guidance_scale: float = None
+        guidance_scale: float = None,
+        ptransp_mode: str = "legacy",
     ) -> torch.Tensor:
+        if ptransp_mode == "legacy":
+            parallel_transport = self.klein.ptransp_legacy
+        elif ptransp_mode == "lorentz":
+            parallel_transport = self.klein.ptransp
+        else:
+            raise ValueError(
+                "ptransp_mode must be 'legacy' or 'lorentz', "
+                f"got {ptransp_mode!r}"
+            )
+
         steps = steps or self.num_timesteps
         dt = 1.0 / steps
         batch_size = cond_code.shape[0]
@@ -196,7 +207,7 @@ class KleinFlowMatching(nn.Module):
             x_euler = self.klein.proj(x_euler, c=1.0)
 
             v2 = self._predict_velocity(x_euler, t_next, cond_code, guidance_scale=guidance_scale)
-            v2_transported = self.klein.ptransp(x_euler, current, v2, c=1.0)
+            v2_transported = parallel_transport(x_euler, current, v2, c=1.0)
             v_avg = (v1 + v2_transported) / 2.0
 
             current = self.klein.expmap(current, v_avg * dt, c=1.0)

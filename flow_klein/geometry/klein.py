@@ -200,38 +200,18 @@ class Klein(Manifold):
     
     
     # ------------------------------------------------------------
-    # Parallel transport 0 → x
+    # Parallel transport through the Lorentz isometry
     # ------------------------------------------------------------
-    def ptransp0(self, x: Tensor, u: Tensor, c: float = 1.0) -> Tensor:
-        """
-        Parallel transport of u (based at origin 0) to T_xK.
-        
-        Args:
-            x: Target point on Klein manifold (..., dim)
-            u: Tangent vector at origin (..., dim)
-            c: Curvature parameter
-        Returns:
-            Transported vector in T_xK (..., dim)
-        """
-        x_norm_sq = (x * x).sum(-1, keepdim=True)                           # (...,1)
-        x_dot_u   = (x * u).sum(-1, keepdim=True)                           # (...,1)
-        sqrt_term = (1.0 - x_norm_sq).clamp_min(self.min_norm).sqrt()       # (...,1)
-        coeff     = x_dot_u * (sqrt_term - 2.0) / (1.0 - sqrt_term).clamp_min(self.min_norm)  # (...,1)
-        return coeff * x + sqrt_term * u                                    # (...,d)
-    
-    # ------------------------------------------------------------
-    # Parallel transport x → y (general)
-    # ------------------------------------------------------------
+    @staticmethod
+    def _lorentz_inner(x: Tensor, y: Tensor) -> Tensor:
+        """Lorentzian inner product with time-like coordinate first."""
+        return -x[..., :1] * y[..., :1] + (x[..., 1:] * y[..., 1:]).sum(-1, keepdim=True)
+
     def ptransp(self, x: Tensor, y: Tensor, v: Tensor, c: float = 1.0) -> Tensor:
         """
-        Parallel transport of tangent vector v from T_xK to T_yK.
-        
-        Uses the composition: PT_{x→y} = PT_{0→y} ∘ PT_{x→0}
-        where PT_{x→0} = (PT_{0→x})^{-1}
-        
-        For Klein model, the parallel transport along geodesic from x to y
-        can be computed via the origin as intermediate point.
-        
+        Analytic parallel transport from T_xK to T_yK along their connecting
+        geodesic, evaluated through the unit-curvature Lorentz isometry.
+
         Args:
             x: Source point on Klein manifold (..., dim)
             y: Target point on Klein manifold (..., dim)
@@ -240,28 +220,63 @@ class Klein(Manifold):
         Returns:
             Transported vector in T_yK (..., dim)
         """
-        # Step 1: Transport v from T_xK to T_0K (inverse of ptransp0)
-        # PT_{x→0}(v) = PT_{0→x}^{-1}(v)
-        v_at_origin = self._ptransp_to_origin(x, v, c)
-        
-        # Step 2: Transport from T_0K to T_yK
-        v_at_y = self.ptransp0(y, v_at_origin, c)
-        
-        return v_at_y
-    
+        if float(c) != 1.0:
+            raise NotImplementedError(
+                "Lorentz parallel transport currently supports only unit curvature c=1"
+            )
+
+        lambda_x = self._lambda_x(x, c)
+        lambda_y = self._lambda_x(y, c)
+
+        point_x = torch.cat((lambda_x, lambda_x * x), dim=-1)
+        point_y = torch.cat((lambda_y, lambda_y * y), dim=-1)
+
+        x_dot_v = (x * v).sum(-1, keepdim=True)
+        tangent_v = torch.cat(
+            (
+                lambda_x.pow(3) * x_dot_v,
+                lambda_x * v + lambda_x.pow(3) * x_dot_v * x,
+            ),
+            dim=-1,
+        )
+
+        coefficient = self._lorentz_inner(point_y, tangent_v)
+        coefficient = coefficient / (
+            1.0 - self._lorentz_inner(point_x, point_y)
+        ).clamp_min(self.min_norm)
+        transported = tangent_v + coefficient * (point_x + point_y)
+
+        time = transported[..., :1]
+        spatial = transported[..., 1:]
+        return (spatial - time * y) / lambda_y
+
+    def ptransp0(self, x: Tensor, u: Tensor, c: float = 1.0) -> Tensor:
+        """Parallel transport of u from the origin to T_xK."""
+        return self.ptransp(torch.zeros_like(x), x, u, c)
+
     def _ptransp_to_origin(self, x: Tensor, v: Tensor, c: float = 1.0) -> Tensor:
+        """Parallel transport of v from T_xK to the origin."""
+        return self.ptransp(x, torch.zeros_like(x), v, c)
+
+    # ------------------------------------------------------------
+    # Legacy parallel transport retained for result reproduction
+    # ------------------------------------------------------------
+    def ptransp0_legacy(self, x: Tensor, u: Tensor, c: float = 1.0) -> Tensor:
+        """Legacy origin-to-x transport formula."""
+        x_norm_sq = (x * x).sum(-1, keepdim=True)                           # (...,1)
+        x_dot_u   = (x * u).sum(-1, keepdim=True)                           # (...,1)
+        sqrt_term = (1.0 - x_norm_sq).clamp_min(self.min_norm).sqrt()       # (...,1)
+        coeff     = x_dot_u * (sqrt_term - 2.0) / (1.0 - sqrt_term).clamp_min(self.min_norm)  # (...,1)
+        return coeff * x + sqrt_term * u                                    # (...,d)
+
+    def ptransp_legacy(self, x: Tensor, y: Tensor, v: Tensor, c: float = 1.0) -> Tensor:
+        """Legacy transport via the origin, retained for reproducibility."""
+        v_at_origin = self._ptransp_to_origin_legacy(x, v, c)
+        return self.ptransp0_legacy(y, v_at_origin, c)
+
+    def _ptransp_to_origin_legacy(self, x: Tensor, v: Tensor, c: float = 1.0) -> Tensor:
         """
-        Parallel transport of tangent vector v from T_xK to T_0K (origin).
-        This is the inverse of ptransp0.
-        
-        For Klein model: PT_{x→0}(v) = sqrt(1-||x||²) * (v - <v,x>/(1+sqrt(1-||x||²)) * x)
-        
-        Args:
-            x: Source point on Klein manifold (..., dim)
-            v: Tangent vector at x (..., dim)
-            c: Curvature parameter
-        Returns:
-            Transported vector at origin (..., dim)
+        Legacy x-to-origin formula used by :meth:`ptransp_legacy`.
         """
         x_norm_sq = (x * x).sum(-1, keepdim=True)                           # (...,1)
         sqrt_term = (1.0 - x_norm_sq).clamp_min(self.min_norm).sqrt()       # (...,1)
