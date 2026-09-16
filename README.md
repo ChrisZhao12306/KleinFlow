@@ -52,9 +52,3 @@ transport along the connecting geodesic with:
 python scripts/train.py --dataset MUTAG --device cuda:0 \
   --flow_integrator heun --flow_ptransp lorentz
 ```
-
-The MUTAG search launcher runs in the background and accepts the same choice:
-
-```bash
-bash scripts/MUTAG_hypsearch.sh --device cuda:0 --flow-ptransp lorentz
-```
