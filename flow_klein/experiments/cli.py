@@ -19,6 +19,11 @@ def run_random_search(dataset, argv):
     parser.add_argument('--epoch-diff', type=int, default=None)
     parser.add_argument('--training-seed', type=int, default=None)
     parser.add_argument('--search-seed', type=int, default=42)
+    parser.add_argument(
+        '--flow-ptransp', '--flow_ptransp',
+        dest='flow_ptransp', choices=('legacy', 'lorentz'), default='legacy',
+        help='parallel transport used by Heun sampling',
+    )
     parser.add_argument('--log-dir', default=None)
     parser.add_argument('--results-file', default=None)
     parser.add_argument('--dry-run', action='store_true')
@@ -28,6 +33,7 @@ def run_random_search(dataset, argv):
     module.DEVICE = options.device
     module.NUM_EXPERIMENTS = options.num_experiments
     module.SEARCH_SEED = options.search_seed
+    module.FIXED_HYPERPARAMS['flow_ptransp'] = options.flow_ptransp
     for field in ('epoch_number', 'epoch_diff', 'training_seed'):
         value = getattr(options, field)
         if value is not None:
